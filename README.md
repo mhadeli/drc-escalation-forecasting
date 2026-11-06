@@ -1,4 +1,6 @@
-# DRC escalation watch
+# DRC escalation forecasting
+
+**Live dashboard: [mhadeli.github.io/drc-escalation-forecasting](https://mhadeli.github.io/drc-escalation-forecasting/)**
 
 Do X posts add forecasting skill over a baseline that already exists?
 
