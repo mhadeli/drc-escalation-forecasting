@@ -203,6 +203,18 @@ def signal_multiplier(spot):
     return min(6.0, max(.5, math.exp(log_m)))
 
 
+def note_cues(text):
+    """Forward-looking cues in an ACLED note. Events and deaths are already in the structured fields."""
+    text = normalize(text)
+    return {name: any(re.search(p, text) for p in SIGNALS[name]) for name in ('control_change', 'escalation', 'deescalation')}
+
+
+def note_multiplier(counts):
+    """The X weights for these three cues, unlearned, with the same limits."""
+    weights = {'control_change': .35, 'escalation': .20, 'deescalation': -.30}
+    return min(6.0, max(.5, math.exp(sum(weight * math.log1p(counts[key]) for key, weight in weights.items()))))
+
+
 def adjust(probabilities, multiplier):
     """Adjust cumulative hazards; never multiply probabilities directly."""
     result, previous = {}, 0.0

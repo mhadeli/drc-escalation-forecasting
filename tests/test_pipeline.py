@@ -57,7 +57,8 @@ class Sandbox(unittest.TestCase):
                     south, west, north, east = PROVINCE_BOX[name]
                     rows.append({'event_id_cnty': f'COD{len(rows)}', 'iso': 180, 'event_date': day.isoformat(),
                                  'latitude': (south + north) / 2, 'longitude': (west + east) / 2,
-                                 'fatalities': 12, 'sub_event_type': 'Armed clash', 'admin1': '', 'admin2': name})
+                                 'fatalities': 12, 'sub_event_type': 'Armed clash', 'admin1': '', 'admin2': name,
+                                 'notes': 'Reinforcements arrived and fighters threatened an offensive.' if index % 3 == 0 else 'A clash occurred.'})
             day, i = acled.month_shift(day, 1), i + 1
         x.write_csv(path, rows)
 
@@ -244,10 +245,10 @@ class EndToEnd(Sandbox):
         backtest.build()
         report = backtest.report(draws=20)
         text = report.read_text()
-        self.assertIn('Lower mean primary Brier', text)
+        self.assertIn('Do ACLED-note text signals beat', text)
         self.assertIn('fatalities001', text)
         reference = json.loads((self.root / 'history' / 'reference.json').read_text())
-        self.assertIn(reference['baseline'], ('recent', 'views'))
+        self.assertEqual(reference['baseline'], 'recent')
 
         out = pipeline.run(posts_file=self.posts_file('2026-06-15'))
         saved = json.loads((out / 'forecast.json').read_text())
@@ -309,6 +310,39 @@ class EndToEnd(Sandbox):
         row = next(r for r in backtest.read_panel(self.data / 'panel.csv') if r['hotspot'] == 'Shabunda' and r['issue'] == '2024-03-01')
         self.assertEqual(row['onset'], 1)
         self.assertAlmostEqual(row['p_recent_30'], -math.expm1(-.5 / 12.5))
+
+    def test_notes_after_the_cutoff_never_change_the_text_signal(self):
+        self.prepare()
+        backtest.build()
+        before = {(r['hotspot'], r['issue']): r['p_text_30'] for r in backtest.read_panel(self.data / 'panel.csv')}
+        with (self.root / 'export.csv').open(newline='') as handle:
+            rows = list(csv.DictReader(handle))
+        for row in rows:
+            if row['event_date'] > '2024-06-01':
+                row['notes'] = 'ultimatum offensive reinforcements'
+        x.write_csv(self.root / 'changed.csv', rows)
+        with mock.patch.object(acled, 'now', lambda: datetime(2026, 11, 1, tzinfo=timezone.utc)):
+            acled.import_file(self.root / 'changed.csv', '2018-01-01', '2026-10-31')
+        backtest.build()
+        changed = False
+        for row in backtest.read_panel(self.data / 'panel.csv'):
+            key = (row['hotspot'], row['issue'])
+            if row['issue'] <= '2024-06-14':
+                self.assertEqual(row['p_text_30'], before[key], key)
+            changed |= row['p_text_30'] != before[key]
+        self.assertTrue(changed)
+
+    def test_export_without_notes_leaves_the_baseline_unchanged(self):
+        self.prepare()
+        with (self.root / 'export.csv').open(newline='') as handle:
+            rows = [{k: v for k, v in r.items() if k != 'notes'} for r in csv.DictReader(handle)]
+        x.write_csv(self.root / 'plain.csv', rows)
+        with mock.patch.object(acled, 'now', lambda: datetime(2026, 11, 1, tzinfo=timezone.utc)):
+            meta = acled.import_file(self.root / 'plain.csv', '2018-01-01', '2026-10-31')
+        self.assertEqual(meta['notes'], 0)
+        backtest.build()
+        for row in backtest.read_panel(self.data / 'panel.csv'):
+            self.assertAlmostEqual(row['p_text_30'], row['p_recent_30'])
 
     def test_unresolved_horizons_are_not_scored(self):
         self.prepare()
@@ -414,6 +448,22 @@ class Orchestration(Sandbox):
         result = views.latest_map(date(2026, 10, 15))
         self.assertEqual(result['run'], 'fatalities002_2026_08_t01')
         self.assertEqual(len(result['cells']), 20)
+
+
+class NoteCues(unittest.TestCase):
+    def test_cues_and_multiplier(self):
+        cues = fc.note_cues('Reinforcements arrived after M23 seized the town.')
+        self.assertTrue(cues['escalation'] and cues['control_change'] and not cues['deescalation'])
+        self.assertTrue(fc.note_cues('Both sides signed a ceasefire.')['deescalation'])
+        self.assertEqual(fc.note_multiplier({'control_change': 0, 'escalation': 0, 'deescalation': 0}), 1)
+        self.assertGreater(fc.note_multiplier({'control_change': 3, 'escalation': 3, 'deescalation': 0}), 1)
+        self.assertLess(fc.note_multiplier({'control_change': 0, 'escalation': 0, 'deescalation': 3}), 1)
+
+    def test_window_ends_at_the_lag_cutoff(self):
+        issue = date(2024, 3, 1)  # Cutoff 2024-02-16, window opens after 2024-01-17.
+        rows = [(date(2024, 2, 16), True, False, False), (date(2024, 2, 17), True, False, False),
+                (date(2024, 1, 17), True, False, False), (date(2024, 1, 18), True, False, False)]
+        self.assertEqual(acled.note_counts(rows, issue)['control_change'], 2)
 
 
 class Extraction(unittest.TestCase):

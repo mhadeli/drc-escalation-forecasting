@@ -20,6 +20,7 @@ TOKEN_URL = 'https://acleddata.com/oauth/token'
 READ_URL = 'https://acleddata.com/api/acled/read'
 PAGE_SIZE = 5000
 COUNTRY = 'Democratic Republic of Congo'
+NOTE_WINDOW_DAYS = 30
 
 
 def month_shift(day, count):
@@ -56,7 +57,8 @@ def read_events(path):
                     raise ValueError('Invalid coordinates or fatalities')
                 events.append({'date': parse_date(row['event_date']), 'lat': lat, 'lon': lon,
                                'major': deaths >= 10 or 'territory' in row['sub_event_type'].lower(),
-                               'admin1': row.get('admin1', ''), 'admin2': row.get('admin2', '')})
+                               'admin1': row.get('admin1', ''), 'admin2': row.get('admin2', ''),
+                               'has_note': bool((row.get('notes') or '').strip()), **fc.note_cues(row.get('notes') or '')})
             except (ValueError, TypeError) as error:
                 raise ValueError(f'ACLED line {line}: {error}') from None
     if not events:
@@ -80,6 +82,7 @@ def import_file(path, coverage_start, coverage_end):
         shutil.copyfile(path, target)
     meta = {'file': target.name, 'sha256': digest, 'retrieved_at': now().isoformat(),
             'coverage_start': start.isoformat(), 'coverage_end': end.isoformat(), 'events': len(events),
+            'notes': sum(e['has_note'] for e in events),
             'availability': 'revised snapshot; event-date lag is not a publication vintage'}
     write_json(DATA / 'acled' / 'snapshot.json', meta)
     derive_boxes(events, digest)
@@ -192,6 +195,20 @@ def load_snapshot():
 def major_dates(events, boxes):
     return {name: sorted({e['date'] for e in events if e['major'] and inside(e['lat'], e['lon'], bounds)})
             for name, bounds in boxes.items()}
+
+
+def note_history(events, boxes):
+    """Per hotspot, each dated note cue. Separate from major events: any event's note can carry a cue."""
+    keys = ('control_change', 'escalation', 'deescalation')
+    return {name: [(e['date'], *(e[k] for k in keys)) for e in events if inside(e['lat'], e['lon'], bounds)]
+            for name, bounds in boxes.items()}
+
+
+def note_counts(history, issue, lag=14, window=NOTE_WINDOW_DAYS):
+    """Notes with each cue in the window ending at the reporting-lag cutoff."""
+    cutoff = issue - timedelta(days=lag)
+    rows = [row for row in history if cutoff - timedelta(days=window) < row[0] <= cutoff]
+    return {key: sum(row[i + 1] for row in rows) for i, key in enumerate(('control_change', 'escalation', 'deescalation'))}
 
 
 def recent_rate(dates, issue, lag=14):

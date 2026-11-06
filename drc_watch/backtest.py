@@ -52,7 +52,7 @@ def fit_scale(rows):
 def build():
     events, meta = acled.load_snapshot()
     boxes, runs = acled.load_boxes(), views.catalog()
-    dates = acled.major_dates(events, boxes)
+    dates, notes = acled.major_dates(events, boxes), acled.note_history(events, boxes)
     coverage_end = resolved_through(meta)
     coverage_start = date.fromisoformat(meta['coverage_start'])
     panels, cache = {}, {}
@@ -70,13 +70,17 @@ def build():
             for name, province_aliases in fc.HOTSPOTS.items():
                 history = dates[name]
                 rate = acled.recent_rate(history, issue, lag)
+                signal = fc.note_multiplier(acled.note_counts(notes[name], issue, lag))
+                baseline = {h: -math.expm1(-rate * h / 30) for h in fc.HORIZONS}
+                text = fc.adjust(baseline, signal)
                 row = {'hotspot': name, 'province': province_aliases[0], 'issue': issue.isoformat(),
                        'lag': lag, 'cutoff': cutoff.isoformat(),
                        'onset': int(not any(acled.month_shift(cutoff, -6) < d <= cutoff for d in history)),
                        'views_run': run['run'] if run else '', 'views_released': run['released'] if run else ''}
                 for h in fc.HORIZONS:
                     row[f'major_{h}'] = acled.target(history, issue, h, coverage_end)
-                    row[f'p_recent_{h}'] = -math.expm1(-rate * h / 30)
+                    row[f'p_recent_{h}'] = baseline[h]
+                    row[f'p_text_{h}'] = text[h]
                     row[f'e_{h}'] = views.expected(monthly.get(name, {}), issue, h)
                 rows.append(row)
             issue = acled.month_shift(issue, 1)
@@ -125,12 +129,12 @@ def auc(truth, scores):
     return float((ranks[truth == 1].sum() - positive * (positive + 1) / 2) / (positive * (len(truth) - positive)))
 
 
-def metrics(truth, recent, external, ranking=None):
-    truth, recent, external = map(np.asarray, (truth, recent, external))
-    a, b = float(np.mean((recent - truth) ** 2)), float(np.mean((external - truth) ** 2))
-    return {'n': len(truth), 'positives': int(truth.sum()), 'brier_recent': a, 'brier_views': b,
-            'skill_views': 1 - b / a if a > 0 else None,
-            'auc_recent': auc(truth, recent), 'auc_views': auc(truth, external if ranking is None else ranking)}
+def metrics(truth, recent, external, ranking, text):
+    truth, recent, external, text = map(np.asarray, (truth, recent, external, text))
+    a, b, c = (float(np.mean((p - truth) ** 2)) for p in (recent, external, text))
+    return {'n': len(truth), 'positives': int(truth.sum()), 'brier_recent': a, 'brier_views': b, 'brier_text': c,
+            'skill_views': 1 - b / a if a > 0 else None, 'skill_text': 1 - c / a if a > 0 else None,
+            'auc_recent': auc(truth, recent), 'auc_views': auc(truth, ranking), 'auc_text': auc(truth, text)}
 
 
 def intervals(rows, horizon, draws=1000):
@@ -140,7 +144,7 @@ def intervals(rows, horizon, draws=1000):
     months = sorted({r['issue'] for r in rows})
     indices = {month: [i for i, row in enumerate(rows) if row['issue'] == month] for month in months}
     arrays = [np.array([r[key] for r in rows]) for key in
-              (f'major_{horizon}', f'p_recent_{horizon}', f'p_views_{horizon}', f'e_{horizon}')]
+              (f'major_{horizon}', f'p_recent_{horizon}', f'p_views_{horizon}', f'e_{horizon}', f'p_text_{horizon}')]
     rng, values = np.random.default_rng(7), {}
     for _ in range(draws):
         sampled = []
@@ -165,7 +169,7 @@ def scoreboard(rows, draws):
             if not paired:
                 continue
             result = metrics(*([r[key] for r in paired] for key in
-                               (f'major_{h}', f'p_recent_{h}', f'p_views_{h}', f'e_{h}')))
+                               (f'major_{h}', f'p_recent_{h}', f'p_views_{h}', f'e_{h}', f'p_text_{h}')))
             scores.append({'split': split, 'horizon': h, **result, 'excluded': len(subset) - len(paired),
                            'intervals': intervals(paired, h, draws)})
     return scores
@@ -175,7 +179,7 @@ def reliability(rows, destination):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    for baseline in ('recent', 'views'):
+    for baseline in ('recent', 'text', 'views'):
         figure, axes = plt.subplots(1, 3, figsize=(10, 3), sharex=True, sharey=True)
         for axis, h in zip(axes, fc.HORIZONS):
             points = [r for r in rows if r[f'p_views_{h}'] is not None and r[f'major_{h}'] is not None]
@@ -204,7 +208,8 @@ def hotspot_detail(rows):
             entry[str(h)] = {'n': len(paired), 'positives': int(sum(r[f'major_{h}'] for r in paired)),
                              'brier_recent': float(np.mean([(r[f'p_recent_{h}'] - r[f'major_{h}']) ** 2 for r in paired])) if paired else None,
                              'brier_views': float(np.mean([(r[f'p_views_{h}'] - r[f'major_{h}']) ** 2 for r in paired])) if paired else None,
-                             'series': [[r['issue'], round(r[f'p_recent_{h}'], 4), round(r[f'p_views_{h}'], 4), int(r[f'major_{h}'])] for r in paired]}
+                             'brier_text': float(np.mean([(r[f'p_text_{h}'] - r[f'major_{h}']) ** 2 for r in paired])) if paired else None,
+                             'series': [[r['issue'], round(r[f'p_recent_{h}'], 4), round(r[f'p_views_{h}'], 4), int(r[f'major_{h}']), round(r[f'p_text_{h}'], 4)] for r in paired]}
         detail[name] = entry
     return detail
 
@@ -224,40 +229,41 @@ def report(draws=1000):
     primary = [s for s in scores['14'] if s['split'] == 'all']
     if len(primary) != 3:
         raise ValueError('No complete paired baseline comparison at all three horizons; cache missing VIEWS runs/cells.')
-    means = {name: sum(s[f'brier_{name}'] for s in primary) / 3 for name in ('recent', 'views')}
-    winner = min(means, key=means.get)
+    means = {name: sum(s[f'brier_{name}'] for s in primary) / 3 for name in ('recent', 'text', 'views')}
+    answer = 'yes' if all(s['intervals'].get('skill_text', [0])[0] > 0 for s in primary) else 'not shown'
     stamp = now().strftime('%Y%m%dT%H%M%S%fZ')
     destination = REPORTS / f'backtest_{stamp}'
     destination.mkdir(parents=True)
     reliability(panels[14], destination)
     calibration = json.loads((DATA / 'calibration.json').read_text())
     payload = {'created_at': now().isoformat(), 'prereg_sha256': checksum(prereg), 'panel': meta,
-               'calibration': calibration, 'bootstrap_draws': draws, 'winner': winner, 'scores': scores}
+               'calibration': calibration, 'bootstrap_draws': draws, 'baseline': 'recent', 'mean_brier': means, 'text_beats_baseline': answer, 'scores': scores}
     write_json(destination / 'scores.json', payload)
     write_json(destination / 'hotspots.json', hotspot_detail(panels[14]))
     lines = ['# Historical baseline comparison', '', f"Resolved through {meta['resolved_through']}; X is not backtested.", '',
-             '| Lag | Split | Days | N | Excluded | Brier recent | Brier VIEWS | VIEWS skill (90% interval) | AUC recent / VIEWS |',
-             '|---|---|---:|---:|---:|---:|---:|---|---|']
+             '| Lag | Split | Days | N | Excluded | Brier baseline | Brier notes | Brier VIEWS | Notes skill (90% interval) | VIEWS skill (90% interval) | AUC baseline / notes / VIEWS |',
+             '|---|---|---:|---:|---:|---:|---:|---:|---|---|---|']
     fmt = lambda v: 'undefined' if v is None else f'{v:.3f}'
     for lag, table in scores.items():
         for s in table:
-            ci = s['intervals'].get('skill_views')
-            interval = f'[{ci[0]:.3f}, {ci[1]:.3f}]' if ci else 'undefined'
+            band = lambda key: f"[{s['intervals'][key][0]:.3f}, {s['intervals'][key][1]:.3f}]" if key in s['intervals'] else 'undefined'
             lines.append(f"| {lag} | {s['split']} | {s['horizon']} | {s['n']} | {s['excluded']} | "
-                         f"{s['brier_recent']:.3f} | {s['brier_views']:.3f} | {fmt(s['skill_views'])} {interval} | "
-                         f"{fmt(s['auc_recent'])} / {fmt(s['auc_views'])} |")
-    lines += ['', f'Lower mean primary Brier: **{winner}**. Selection and evaluation share historical data.', '',
+                         f"{s['brier_recent']:.3f} | {s['brier_text']:.3f} | {s['brier_views']:.3f} | "
+                         f"{fmt(s['skill_text'])} {band('skill_text')} | {fmt(s['skill_views'])} {band('skill_views')} | "
+                         f"{fmt(s['auc_recent'])} / {fmt(s['auc_text'])} / {fmt(s['auc_views'])} |")
+    lines += ['', f"Do ACLED-note text signals beat the ACLED-history baseline at all three horizons, with intervals above zero? **{answer}**.", '',
+              f"Notes in this export: {meta['acled'].get('notes', 'unknown')} of {meta['acled']['events']} events. Without notes, the text signal equals the baseline.", '',
               f"2022 mapping: c={calibration['coefficient']:.6g}, {calibration['n']} horizon-labelled cases. "
               'It is fitted on fatalities001 forecasts and applied to later VIEWS model versions, so it may not transfer.', '',
               f"Hotspots with no VIEWS cell centre in their box, so excluded from paired scores: {', '.join(meta['hotspots_without_views']) or 'none'}.", '',
-              '![Recent-rate reliability](reliability_recent.png)', '![VIEWS reliability](reliability_views.png)', '',
+              '![Baseline reliability](reliability_recent.png)', '![Notes-adjusted reliability](reliability_text.png)', '![VIEWS reliability](reliability_views.png)', '',
               '## Cases (30 days; alert threshold 0.5, descriptive)', '']
     paired = [r for r in panels[14] if r['p_views_30'] is not None]
     for title, label, alert in [('Onset caught', 1, True), ('Onset missed', 1, False), ('False alarm', 0, True)]:
-        cases = [r for r in paired if r['major_30'] == label and (r[f'p_{winner}_30'] >= .5) == alert
+        cases = [r for r in paired if r['major_30'] == label and (r['p_text_30'] >= .5) == alert
                  and (not label or r['onset'])]
-        case = max(cases, key=lambda r: r[f'p_{winner}_30']) if cases else None
-        lines.append(f"- {title}: {case['hotspot']}, {case['issue']}, p={case[f'p_{winner}_30']:.3f}." if case else f'- {title}: no qualifying case.')
+        case = max(cases, key=lambda r: r['p_text_30']) if cases else None
+        lines.append(f"- {title}: {case['hotspot']}, {case['issue']}, p={case['p_text_30']:.3f}." if case else f'- {title}: no qualifying case.')
     lines += ['', '## Limitations', '', prereg.read_text().split('## Limits that must accompany every report')[1].strip(), '',
               f"ACLED retrieved: {meta['acled']['retrieved_at']}; SHA-256: `{meta['acled']['sha256']}`.",
               'Brier and AUC intervals for every split are in scores.json. Insufficient classes yield undefined AUC.']
@@ -265,26 +271,30 @@ def report(draws=1000):
     report_path.write_text('\n'.join(lines) + '\n')
     reference = HISTORY / 'reference.json'
     if not reference.exists():
-        write_json(reference, {'baseline': winner, 'coefficient': calibration['coefficient'], 'frozen_at': now().isoformat(),
+        write_json(reference, {'baseline': 'recent', 'coefficient': calibration['coefficient'], 'frozen_at': now().isoformat(),
                               'report': str(report_path.relative_to(ROOT)), 'prereg_sha256': checksum(prereg),
                               'hotspots_sha256': meta['hotspots_sha256'], 'mean_brier': means})
     return report_path
 
 
-def live_baselines(issue, dates, boxes, reference):
+def live_baselines(issue, dates, boxes, reference, notes):
     run = views.select_run(views.catalog(), issue)
     monthly = views.load_monthly(run['run'], boxes) if run else {}
     result = {}
     for name in boxes:
         rate = acled.recent_rate(dates[name], issue)
-        row = {'hotspot': name, 'province': fc.HOTSPOTS[name][0], 'views_run': run['run'] if run else None, 'recent_rate': rate}
+        counts = acled.note_counts(notes[name], issue)
+        note_signal = fc.note_multiplier(counts)
+        baseline = {h: -math.expm1(-rate * h / 30) for h in fc.HORIZONS}
+        text = fc.adjust(baseline, note_signal)
+        row = {'hotspot': name, 'province': fc.HOTSPOTS[name][0], 'views_run': run['run'] if run else None, 'recent_rate': rate,
+               'note_multiplier': round(note_signal, 3), 'note_counts': counts}
         for h in fc.HORIZONS:
             expected = views.expected(monthly.get(name, {}), issue, h)
             row[f'e{h}'] = expected
-            row[f'p{h}_recent'] = -math.expm1(-rate * h / 30)
+            row[f'p{h}_recent'] = baseline[h]
+            row[f'p{h}_notes'] = text[h]
             row[f'p{h}_views'] = None if expected is None else mapping(expected, reference['coefficient'])
-            row[f'p{h}_baseline'] = row[f'p{h}_{reference["baseline"]}']
-            if row[f'p{h}_baseline'] is None:
-                raise ValueError(f"Reference VIEWS forecast missing for {name}; fetch the required run before forecasting.")
+            row[f'p{h}_baseline'] = baseline[h]
         result[name] = row
     return result

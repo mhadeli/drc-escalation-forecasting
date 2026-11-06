@@ -48,6 +48,7 @@ def collect(history, boxes_path):
             'status': read(history / 'pipeline_status.json'), 'reference': read(history / 'reference.json'),
             'centres': CENTRES, 'boxes': boxes(boxes_path),
             'plots': {'recent': image(history / 'backtest' / 'reliability_recent.png'),
+                      'text': image(history / 'backtest' / 'reliability_text.png'),
                       'views': image(history / 'backtest' / 'reliability_views.png')}}
 
 

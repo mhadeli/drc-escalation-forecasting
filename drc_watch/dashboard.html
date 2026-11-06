@@ -65,6 +65,12 @@ select { font: inherit; padding: 4px 8px; background: var(--surface); color: var
 .state.skipped::before { content: "–"; }
 .state.failed::before { content: "✕"; }
 .state.notrun::before { content: "○"; }
+.state.partial::before { content: "◐"; }
+.stepRow { display: flex; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--grid); }
+.stepRow h3 { margin: 2px 0; }
+.stepRow p { margin: 2px 0 6px; }
+.stepRow ul { margin: 4px 0 6px; padding-left: 20px; }
+.stepNum { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--text); color: var(--surface); font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .formula { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; background: var(--page); border: 1px solid var(--grid); border-radius: 6px; padding: 8px 12px; margin: 6px 0 10px; overflow-x: auto; white-space: pre-wrap; }
 .notice { border-left: 3px solid var(--text-3); padding: 8px 14px; background: var(--surface); margin: 12px 0; font-size: 14px; }
 svg text { fill: var(--text-2); font: 12px system-ui, sans-serif; }
@@ -75,7 +81,7 @@ img.plot { width: 100%; background: #fff; border-radius: 6px; margin: 6px 0; }
 <body>
 <header>
   <h1>DRC Escalation Forecasting</h1>
-  <p class="muted">Do posts on X add forecasting skill over a baseline that already exists? For 20 hotspots in the Democratic Republic of the Congo, this tracks the probability of a major escalation within 30, 60 and 90 days.</p>
+  <p class="muted">Do text signals beat a forecasting baseline built from ACLED history alone? This workflow tests X posts and ACLED notes against that baseline, compares each with VIEWS forecasts, and tracks the probability of a major escalation within 30, 60 and 90 days in 20 hotspots of the Democratic Republic of the Congo.</p>
 </header>
 <nav class="tabs" role="tablist" id="tabs"></nav>
 <main>
@@ -98,15 +104,31 @@ const latest = DATA.runs.length ? DATA.runs[DATA.runs.length - 1] : null;
 const SERIES = {
   p: { label: 'X-adjusted forecast', color: 'var(--forecast)' },
   views: { label: 'VIEWS mapped to target', color: 'var(--views)' },
-  recent: { label: 'ACLED recent rate', color: 'var(--recent)' },
+  recent: { label: 'ACLED history baseline', color: 'var(--recent)' },
+  notes: { label: 'Baseline + ACLED notes', color: 'var(--forecast)' },
 };
 const STEPS = [
-  ['VIEWS', 'Cache every dated VIEWS run for DRC grid cells, with its release date.'],
-  ['ACLED', 'Import DRC events. They set the outcomes and the recent-rate baseline.'],
-  ['Backtest', 'Replay monthly issues from 2023. Score both baselines and freeze the better one.'],
-  ['Forecast', 'Pull X posts, extract signals, and adjust the frozen baseline.'],
-  ['Score', 'When a horizon passes, compare forecast and baseline with what ACLED recorded.'],
-  ['Publish', 'Commit post-free results, then rebuild this page.'],
+  { title: 'Data ingestion', sub: 'X, ACLED, VIEWS', stages: ['VIEWS', 'ACLED'], text: 'Three sources are collected.', points: [
+    'X: public posts about conflict in the DRC, in French and English. Up to 1,000 posts, spread as a daily quota across the last 7 days, the most the X search allows.',
+    'ACLED: every recorded DRC event from 2018 onward, with its date, location, fatalities, type and the analyst’s written note.',
+    () => `VIEWS: the published conflict forecasts for each DRC grid cell, with the date each run was released${DATA.views ? `. Latest run used: ${DATA.views.run}` : ''}.`] },
+  { title: 'Signal extraction', sub: 'Text to counts', stages: ['Backtest'], text: 'Text becomes numbers for each hotspot.', points: [
+    'X posts: rules or an LLM decide the place and whether a post reports an event, a change of control, escalation or de-escalation. Each author counts once.',
+    'ACLED notes: rules only look for the same cues. An LLM reading old text already knows what happened next, which would leak the future.'] },
+  { title: 'Baseline', sub: 'ACLED history only', stages: ['Backtest'], text: 'This is the number the text signals have to beat.', points: [
+    'A major escalation is one ACLED event with 10+ fatalities or a territory change, inside a hotspot’s box.',
+    'The baseline counts how many of the last 12 months had one, then turns that rate into a probability for 30, 60 and 90 days. It uses no text at all.'] },
+  { title: 'Backtest', sub: 'Replay 2023 onward', stages: ['Backtest'], text: 'Each past month is replayed as if it were today, using only what was dated before it.', points: [
+    'Baseline, baseline + ACLED notes, and VIEWS each forecast the same hotspot-months, and all three are scored against what ACLED recorded.',
+    'This gives an answer now, because notes and VIEWS have history. X cannot be replayed, because the search only reaches back 7 days.'] },
+  { title: 'Live forecast', sub: 'Baseline + X', stages: ['Forecast'], text: 'Each week, the X signal adjusts the baseline for today.', points: [
+    'The forecast is saved with its date before the outcome is known, so it cannot be changed afterwards.',
+    'The baseline, notes and VIEWS numbers are saved beside it for comparison.'] },
+  { title: 'Compare and score', sub: 'Text, baseline, VIEWS', stages: ['Score'], text: 'When a forecast’s window has passed, ACLED shows what actually happened.', points: [
+    'Brier score measures the gap between probability and outcome, and lower is better. Skill above zero means a forecast beat the baseline.',
+    'No conclusion about X is drawn before 26 weekly issues across six months.'] },
+  { title: 'Publish', sub: 'This dashboard', stages: ['Publish'], text: 'Results are committed and this page is rebuilt.', points: [
+    'Only aggregates are published. Post text, account names and raw ACLED events never leave the private workspace.'] },
 ];
 
 function el(tag, attrs, ...children) {
@@ -157,23 +179,28 @@ function renderResults() {
   const root = document.getElementById('results');
   const horizons = DATA.live ? DATA.live.horizons : {};
   const h30 = horizons['30'];
-  let answer, note;
-  if (h30) {
-    answer = h30.conclusive ? (h30.skill_90 && h30.skill_90[0] > 0 ? 'Yes, at 30 days' : 'Not shown') : 'Too early';
-    note = `Skill ${num(h30.skill)} across ${h30.issues} weekly issues. A conclusion needs 26 across six months.`;
-  } else {
-    answer = 'Not known yet';
-    note = latest ? `The earliest 30-day forecast resolves on ${latest.resolve_by.p30}.` : 'No forecast has been issued by this pipeline yet.';
-  }
   const bt = DATA.backtest;
+  const notes30 = bt ? bt.scores['14'].find(s => s.split === 'all' && s.horizon === 30) : null;
+  let answer = 'Waiting for ACLED', note = 'The backtest fills this in. It tests ACLED notes against the baseline.';
+  if (bt) {
+    answer = bt.text_beats_baseline === 'yes' ? 'Yes, ACLED notes' : 'Not shown by notes';
+    const ci = notes30.intervals.skill_text;
+    note = `Notes skill at 30 days: ${num(notes30.skill_text)}${ci ? ` (90% interval ${num(ci[0])} to ${num(ci[1])})` : ''}. `;
+    note += h30 ? `X so far: ${num(h30.skill)} across ${h30.issues} weekly issues, which is too early to conclude.` : 'X is scored live and has no resolved forecasts yet.';
+  }
   root.append(el('div', { class: 'tiles' },
-    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Does X add skill?'), el('div', { class: 'value' }, answer), el('div', { class: 'note' }, note)),
-    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Baseline X has to beat'), el('div', { class: 'value' }, DATA.reference ? (DATA.reference.baseline === 'views' ? 'VIEWS' : 'Recent rate') : 'Not chosen yet'),
-      el('div', { class: 'note' }, bt ? `Lower mean Brier, resolved through ${bt.panel.resolved_through}. Chosen on the same data it is scored on.` : 'Needs the ACLED backtest.')),
-    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Latest forecast'), el('div', { class: 'value' }, latest ? latest.issued : 'None yet'),
-      el('div', { class: 'note' }, latest ? `Extractor: ${latest.extractor.model || latest.extractor.extractor}` : 'Needs a frozen baseline and an X pull.'))));
+    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Do text signals beat the baseline?'), el('div', { class: 'value' }, answer), el('div', { class: 'note' }, note)),
+    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Baseline to beat'), el('div', { class: 'value' }, 'ACLED history'),
+      el('div', { class: 'note' }, notes30 ? `Brier at 30 days: ${num(notes30.brier_recent)}, resolved through ${bt.panel.resolved_through}. VIEWS: ${num(notes30.brier_views)}.` : 'Fixed in advance. Its score appears once ACLED is loaded.')),
+    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Latest forecast'), el('div', { class: 'value' }, latest ? latest.issued : 'Waiting for X and ACLED'),
+      el('div', { class: 'note' }, latest ? `Extractor: ${latest.extractor.model || latest.extractor.extractor}. The 30-day window closes ${latest.resolve_by.p30}.` : 'A live run needs the backtest and an X pull.'))));
   if (!bt && !latest) {
-    root.append(el('div', { class: 'notice' }, 'No results yet. The VIEWS data is loaded and shown on the Map tab. Scores and forecasts appear here once ACLED data is available. The How it works tab shows the status of each stage.'));
+    root.append(el('div', { class: 'notice' }, el('b', {}, 'Why these are empty. '), 'No synthetic numbers are shown. ACLED supplies both the outcomes and the baseline, so nothing can be scored until it is loaded. The steps that fill this page:'),
+      el('ol', {}, [
+        'Load the ACLED export or credentials. The backtest then fills the first two tiles with real scores for the baseline, ACLED notes and VIEWS.',
+        'Pull X posts. The first live forecast then fills the third tile.',
+        'Wait for each forecast’s window to pass. Live X scores then appear below.',
+      ].map(t => el('li', {}, t))));
   }
   if (latest) {
     root.append(el('h2', {}, `Forecasts issued ${latest.issued}`));
@@ -182,10 +209,10 @@ function renderResults() {
       short(r.hotspot), pct(r.p30), pct(r.p30_baseline), pts(r.p30 - r.p30_baseline), pct(r.p60), pct(r.p90), drivers(r)]), 1, [6]));
   }
   if (Object.keys(horizons).length) {
-    root.append(el('h2', {}, 'X-adjusted forecast against baseline, resolved forecasts only'));
-    root.append(table(['Days', 'Weekly issues', 'Forecasts', 'Brier forecast', 'Brier baseline', 'Skill', '90% interval', 'Status'],
-      Object.entries(horizons).map(([h, s]) => [h, s.issues, s.forecasts, num(s.brier_model), num(s.brier_baseline), num(s.skill),
-        s.skill_90 ? `${num(s.skill_90[0])} to ${num(s.skill_90[1])}` : 'n/a', s.conclusive ? 'Conclusive' : 'Interim']), 0, [7]));
+    root.append(el('h2', {}, 'Live scores against the baseline, resolved forecasts only'));
+    root.append(table(['Days', 'Weekly issues', 'Forecasts', 'Brier baseline', 'Brier X', 'X skill', '90% interval', 'Notes skill', 'VIEWS skill', 'Status'],
+      Object.entries(horizons).map(([h, s]) => [h, s.issues, s.forecasts, num(s.brier_baseline), num(s.brier_model), num(s.skill),
+        s.skill_90 ? `${num(s.skill_90[0])} to ${num(s.skill_90[1])}` : 'Too few issues', num(s.skill_notes), num(s.skill_views), s.conclusive ? 'Conclusive' : 'Interim']), 0, [9]));
   }
 }
 function drivers(r) {
@@ -202,7 +229,7 @@ let map, gridLayer, spotLayer;
 function renderMapControls() {
   const box = document.getElementById('mapControls');
   const measure = el('select', { id: 'measure', 'aria-label': 'Hotspot measure' });
-  const options = latest ? [['p', 'X-adjusted forecast'], ['views', 'VIEWS mapped to target'], ['recent', 'ACLED recent rate'], ['diff', 'X change from baseline']] : [['none', 'Locations only']];
+  const options = latest ? [['p', 'X-adjusted forecast'], ['notes', 'Baseline + ACLED notes'], ['views', 'VIEWS mapped to target'], ['recent', 'ACLED history baseline'], ['diff', 'X change from baseline']] : [['none', 'Locations only']];
   options.forEach(([v, t]) => measure.append(el('option', { value: v }, t)));
   const horizon = el('select', { id: 'mapH', 'aria-label': 'Horizon' });
   [30, 60, 90].forEach(h => horizon.append(el('option', { value: h }, `${h} days`)));
@@ -250,23 +277,23 @@ function drawMap() {
     let value = null, color = '#0b0b0b', radius = 5, text = short(name);
     if (r && measure !== 'none') {
       const base = r[`p${h}_baseline`];
-      value = measure === 'p' ? r[`p${h}`] : measure === 'views' ? r[`p${h}_views`] : measure === 'recent' ? r[`p${h}_recent`] : r[`p${h}`] - base;
+      value = measure === 'p' ? r[`p${h}`] : measure === 'notes' ? r[`p${h}_notes`] : measure === 'views' ? r[`p${h}_views`] : measure === 'recent' ? r[`p${h}_recent`] : r[`p${h}`] - base;
       if (value !== null) {
         if (measure === 'diff') { radius = 5 + Math.abs(value) * 40; color = value >= 0 ? '#eb6834' : '#2a78d6'; text = `${short(name)}: ${pts(value)}`; }
-        else { radius = 5 + value * 16; color = measure === 'p' ? '#2a78d6' : measure === 'views' ? '#eb6834' : '#1baf7a'; text = `${short(name)}: ${pct(value)}`; }
+        else { radius = 5 + value * 16; color = measure === 'p' || measure === 'notes' ? '#2a78d6' : measure === 'views' ? '#eb6834' : '#1baf7a'; text = `${short(name)}: ${pct(value)}`; }
       } else text = `${short(name)}: no forecast`;
     }
     const marker = L.circleMarker(centre, { radius, color: '#fff', weight: 2, fillColor: color, fillOpacity: .9 }).addTo(spotLayer);
     marker.bindTooltip(text, { sticky: true });
     const popup = el('div', {}, el('b', {}, name));
-    if (r) popup.append(el('div', {}, `X-adjusted ${pct(r[`p${h}`])} · VIEWS ${pct(r[`p${h}_views`])} · recent ${pct(r[`p${h}_recent`])}`), el('div', {}, drivers(r)));
+    if (r) popup.append(el('div', {}, `Baseline ${pct(r[`p${h}_recent`])} · X ${pct(r[`p${h}`])} · notes ${pct(r[`p${h}_notes`])} · VIEWS ${pct(r[`p${h}_views`])}`), el('div', {}, drivers(r)));
     else popup.append(el('div', {}, DATA.hotspots && DATA.hotspots[name] ? `${DATA.hotspots[name]['90'].positives} of ${DATA.hotspots[name]['90'].n} backtest months had a major event within 90 days.` : 'No forecast yet.'));
     marker.bindPopup(popup);
   }
   const key = document.getElementById('mapLegend');
   key.replaceChildren();
   if (v && showGrid) key.append(el('span', {}, 'VIEWS expected deaths, 3 months: 0', el('span', { class: 'scale' }), `${Math.max(...v.cells.map(c => c[2])).toFixed(0)} (log scale)`));
-  key.append(el('span', {}, el('i', { style: `background:${{ p: '#2a78d6', views: '#eb6834', recent: '#1baf7a', diff: '#eb6834' }[measure] || '#0b0b0b'}` }), measure === 'none' ? 'Hotspot' : measure === 'diff' ? 'Orange raises, blue lowers; size shows the change' : 'Hotspot; size shows the probability'));
+  key.append(el('span', {}, el('i', { style: `background:${{ p: '#2a78d6', notes: '#2a78d6', views: '#eb6834', recent: '#1baf7a', diff: '#eb6834' }[measure] || '#0b0b0b'}` }), measure === 'none' ? 'Hotspot' : measure === 'diff' ? 'Orange raises, blue lowers; size shows the change' : 'Hotspot; size shows the probability'));
   document.getElementById('mapNote').textContent = (v ? `VIEWS grid from run ${v.run}, released ${v.released}: state-based deaths per 0.5° cell, ${v.total} in total for the DRC over the next three months. ` : '') +
     'Hotspot dots mark approximate territory centres. Scored areas are the boxes in config/hotspots.csv, drawn as outlines once they exist; dashed outlines are not reviewed yet.';
 }
@@ -311,7 +338,7 @@ function lineChart(series) {
     if (s[0].endsWith('-01-01')) svg.append(svgEl('text', { x: x(i), y: height - 8, 'text-anchor': 'middle' }, s[0].slice(0, 4)));
     if (s[3]) svg.append(svgEl('rect', { x: x(i) - 1.5, y: height - bottom + 4, width: 3, height: 13, fill: 'var(--text-2)', rx: 1 }));
   });
-  [['recent', 1], ['views', 2]].forEach(([key, index]) => svg.append(svgEl('polyline', {
+  [['recent', 1], ['notes', 4], ['views', 2]].forEach(([key, index]) => svg.append(svgEl('polyline', {
     points: series.map((s, i) => `${x(i)},${y(s[index])}`).join(' '), fill: 'none', stroke: SERIES[key].color, 'stroke-width': 2, 'stroke-linejoin': 'round' })));
   const cross = svgEl('line', { y1: top, y2: height - bottom, stroke: 'var(--neutral)', visibility: 'hidden' });
   svg.append(cross);
@@ -321,7 +348,7 @@ function lineChart(series) {
     const i = Math.max(0, Math.min(series.length - 1, Math.round((e.clientX - box.left - left) / (width - left - right) * (series.length - 1))));
     const s = series[i];
     cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
-    showTip(e, [`Issued ${s[0]}`, `${SERIES.recent.label}: ${pct(s[1])}`, `${SERIES.views.label}: ${pct(s[2])}`, s[3] ? 'A major event followed' : 'No major event followed']);
+    showTip(e, [`Issued ${s[0]}`, `${SERIES.recent.label}: ${pct(s[1])}`, `${SERIES.notes.label}: ${pct(s[4])}`, `${SERIES.views.label}: ${pct(s[2])}`, s[3] ? 'A major event followed' : 'No major event followed']);
   });
   hit.addEventListener('mouseleave', () => { hideTip(); cross.setAttribute('visibility', 'hidden'); });
   svg.append(hit);
@@ -330,9 +357,9 @@ function lineChart(series) {
 function renderCompare() {
   const root = document.getElementById('compare');
   root.replaceChildren();
-  root.append(el('p', { class: 'muted' }, 'VIEWS predicts state-based UCDP deaths. Our target is any ACLED event with 10+ fatalities or a territory change. To compare them, expected VIEWS deaths in each box become a probability through one coefficient fitted on 2022. That mapping is ours, not a VIEWS product, and the different target puts VIEWS at a disadvantage.'));
+  root.append(el('p', { class: 'muted' }, 'The baseline uses ACLED history alone, and each text signal adjusts it. VIEWS is an outside comparison. It predicts state-based UCDP deaths while our target is any ACLED event with 10+ fatalities or a territory change, so expected VIEWS deaths in each box become a probability through one coefficient fitted on 2022. That mapping is ours, not a VIEWS product, and the different target puts VIEWS at a disadvantage.'));
   if (!latest && !DATA.backtest) {
-    root.append(el('div', { class: 'notice' }, 'The comparison needs ACLED outcomes, which are not loaded yet. The VIEWS forecast itself is on the Map tab.'));
+    root.append(el('div', { class: 'notice' }, 'The comparison needs ACLED, which sets both the baseline and the outcomes. It is not loaded yet, so no comparison can be scored. The real VIEWS forecast is on the Map tab.'));
     return;
   }
   const horizon = el('select', { 'aria-label': 'Horizon' });
@@ -347,7 +374,7 @@ function renderCompare() {
       const rows = [...latest.rows].sort((a, b) => b[`p${h}`] - a[`p${h}`]);
       body.append(el('h2', {}, `Latest forecast by hotspot, issued ${latest.issued}`), legend(['p', 'views', 'recent']),
         el('div', { class: 'card scroll' }, dotPlot(rows, h)),
-        table(['Hotspot', 'X-adjusted', 'VIEWS', 'Recent rate', 'Reference'], rows.map(r => [short(r.hotspot), pct(r[`p${h}`]), pct(r[`p${h}_views`]), pct(r[`p${h}_recent`]), pct(r[`p${h}_baseline`])])));
+        table(['Hotspot', 'Baseline', 'X-adjusted', 'Baseline + notes', 'VIEWS'], rows.map(r => [short(r.hotspot), pct(r[`p${h}_recent`]), pct(r[`p${h}`]), pct(r[`p${h}_notes`]), pct(r[`p${h}_views`])])));
     }
     if (DATA.hotspots) {
       const names = Object.keys(DATA.hotspots);
@@ -358,23 +385,23 @@ function renderCompare() {
         const entry = DATA.hotspots[pick.value][h];
         chart.replaceChildren(
           entry.series.length ? lineChart(entry.series) : el('p', {}, 'No paired months for this hotspot. Its box may be too small to contain a VIEWS cell centre.'),
-          el('p', { class: 'small' }, `Brier: recent rate ${num(entry.brier_recent)}, VIEWS ${num(entry.brier_views)}. Lower is better. ${entry.positives} of ${entry.n} months had a major event within ${h} days.`));
+          el('p', { class: 'small' }, `Brier: baseline ${num(entry.brier_recent)}, baseline + notes ${num(entry.brier_text)}, VIEWS ${num(entry.brier_views)}. Lower is better. ${entry.positives} of ${entry.n} months had a major event within ${h} days.`));
       };
       pick.addEventListener('change', plot);
       body.append(el('h2', {}, 'Baselines against what happened, 2023 onward'), el('div', { class: 'controls' }, el('label', {}, 'Hotspot ', pick)),
-        el('div', { class: 'legend' }, el('span', {}, el('i', { style: `background:${SERIES.views.color}` }), SERIES.views.label), el('span', {}, el('i', { style: `background:${SERIES.recent.color}` }), SERIES.recent.label), el('span', {}, el('i', { class: 'bar' }), 'A major event followed')), chart);
+        el('div', { class: 'legend' }, ['recent', 'notes', 'views'].map(k => el('span', {}, el('i', { style: `background:${SERIES[k].color}` }), SERIES[k].label)), el('span', {}, el('i', { class: 'bar' }), 'A major event followed')), chart);
       plot();
     }
     if (DATA.backtest) {
       const rows = DATA.backtest.scores['14'].filter(s => s.horizon === Number(h)).map(s => {
-        const ci = s.intervals.skill_views;
-        return [s.split, s.n, s.positives, num(s.brier_recent), num(s.brier_views), num(s.skill_views), ci ? `${num(ci[0])} to ${num(ci[1])}` : 'n/a', num(s.auc_recent), num(s.auc_views)];
+        const band = key => s.intervals[key] ? `${num(s.intervals[key][0])} to ${num(s.intervals[key][1])}` : 'n/a';
+        return [s.split, s.n, s.positives, num(s.brier_recent), num(s.brier_text), num(s.brier_views), num(s.skill_text), band('skill_text'), num(s.skill_views), band('skill_views')];
       });
       body.append(el('h2', {}, 'Scoreboard, all paired cases'),
-        el('p', { class: 'muted' }, 'Positive VIEWS skill means VIEWS beat the recent rate on Brier score. Onsets are months with no major event in the prior six, the hardest and most useful cases.'),
-        table(['Split', 'N', 'Major', 'Brier recent', 'Brier VIEWS', 'VIEWS skill', '90% interval', 'AUC recent', 'AUC VIEWS'], rows));
+        el('p', { class: 'muted' }, 'Skill above zero means a forecast beat the ACLED history baseline on Brier score. It counts as a win only if the whole interval is above zero. Onsets are months with no major event in the prior six, the hardest and most useful cases.'),
+        table(['Split', 'N', 'Major', 'Brier baseline', 'Brier notes', 'Brier VIEWS', 'Notes skill', '90% interval', 'VIEWS skill', '90% interval'], rows));
       body.append(el('h2', {}, 'Can the probabilities be trusted?'), el('p', { class: 'muted' }, 'A calibrated forecast sits on the dashed line: events given 40% happen about 40% of the time.'));
-      for (const [key, label] of [['recent', 'Recent rate calibration'], ['views', 'VIEWS mapping calibration']]) {
+      for (const [key, label] of [['recent', 'Baseline calibration'], ['text', 'Baseline + notes calibration'], ['views', 'VIEWS mapping calibration']]) {
         if (DATA.plots[key]) body.append(el('img', { class: 'plot', src: DATA.plots[key], alt: label }));
       }
     }
@@ -384,27 +411,67 @@ function renderCompare() {
 }
 
 /* How it works */
+function stepStatus(step) {
+  const found = step.stages.map(stageOf).filter(Boolean);
+  if (!found.length) return 'notrun';
+  if (found.some(s => s.status === 'failed')) return 'failed';
+  if (found.every(s => s.status === 'done')) return 'done';
+  return found.some(s => s.status === 'done') ? 'partial' : 'skipped';
+}
+const STATUS = { done: 'Done', partial: 'Partly done', skipped: 'Waiting', failed: 'Failed', notrun: 'Not run' };
+function statusLine(step) {
+  const code = stepStatus(step);
+  const found = step.stages.map(stageOf).filter(Boolean);
+  return el('p', { class: 'small' }, el('span', { class: `state ${code}` }, STATUS[code]), found.length ? ` ${found.map(s => s.stage === 'Backtest' && step.title !== 'Backtest' ? s.detail : `${s.stage}: ${s.detail}`).join(' ')}` : '');
+}
+function flowDiagram() {
+  const width = 1080, boxW = 134, gap = (width - boxW * STEPS.length) / (STEPS.length - 1), top = 74, boxH = 92;
+  const svg = svgEl('svg', { viewBox: `0 0 ${width} 186`, width: '100%', style: 'min-width:860px', role: 'img', 'aria-label': 'Seven numbered workflow steps from data ingestion to publishing' });
+  const defs = svgEl('defs', {}, svgEl('marker', { id: 'arrow', viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto' }, svgEl('path', { d: 'M0 0L8 4L0 8z', fill: 'var(--neutral)' })));
+  svg.append(defs);
+  [['X posts', 0], ['ACLED events + notes', 1], ['VIEWS forecasts', 2]].forEach(([label, i]) => {
+    const x = i * 170, w = 158;
+    svg.append(svgEl('rect', { x, y: 2, width: w, height: 30, rx: 15, fill: 'var(--page)', stroke: 'var(--border)' }));
+    svg.append(svgEl('text', { x: x + w / 2, y: 22, 'text-anchor': 'middle' }, label));
+    svg.append(svgEl('path', { d: `M${x + w / 2} 32 L${boxW / 2} ${top - 2}`, fill: 'none', stroke: 'var(--neutral)', 'marker-end': 'url(#arrow)' }));
+  });
+  STEPS.forEach((step, i) => {
+    const x = i * (boxW + gap), code = stepStatus(step);
+    svg.append(svgEl('rect', { x, y: top, width: boxW, height: boxH, rx: 10, fill: 'var(--surface)', stroke: 'var(--border)', 'stroke-width': 1.5 }));
+    svg.append(svgEl('circle', { cx: x + 19, cy: top + 20, r: 12, fill: 'var(--text)' }));
+    svg.append(svgEl('text', { x: x + 19, y: top + 24.5, 'text-anchor': 'middle', style: 'fill:var(--surface);font-weight:700' }, i + 1));
+    const words = step.title.split(' ');
+    svg.append(svgEl('text', { x: x + 37, y: words.length > 1 ? top + 16 : top + 25, style: 'fill:var(--text);font-weight:620;font-size:13px' }, words[0]));
+    if (words.length > 1) svg.append(svgEl('text', { x: x + 37, y: top + 32, style: 'fill:var(--text);font-weight:620;font-size:13px' }, words.slice(1).join(' ')));
+    svg.append(svgEl('text', { x: x + 10, y: top + 56, style: 'font-size:11px' }, step.sub.length > 22 ? `${step.sub.slice(0, 21)}…` : step.sub));
+    svg.append(svgEl('text', { x: x + 10, y: top + 77, style: 'font-size:11.5px;font-weight:600' }, `${{ done: '✓', partial: '◐', skipped: '–', failed: '✕', notrun: '○' }[code]} ${STATUS[code]}`));
+    if (i < STEPS.length - 1) svg.append(svgEl('line', { x1: x + boxW + 1, x2: x + boxW + gap - 2, y1: top + boxH / 2, y2: top + boxH / 2, stroke: 'var(--neutral)', 'stroke-width': 1.5, 'marker-end': 'url(#arrow)' }));
+  });
+  svg.append(svgEl('text', { x: 0, y: 182, style: 'font-size:11.5px' }, 'Step 4 tests ACLED notes on past data. Step 5 tests X going forward. Step 6 compares both with the baseline and VIEWS.'));
+  return svg;
+}
 function renderHow() {
   const root = document.getElementById('how');
-  root.append(el('h2', {}, 'The workflow'));
-  root.append(el('p', { class: 'muted' }, DATA.status ? `A GitHub Actions run executes these stages in order. Status from the last run, finished ${when(DATA.status.finished_at)}.` : 'A GitHub Actions run executes these stages in order. It has not run yet.'));
-  root.append(el('div', { class: 'flow' }, STEPS.map(([name, what], i) => {
-    const s = stageOf(name);
-    return el('div', { class: 'step' }, el('b', {}, `${i + 1}. ${name}`), el('div', { class: 'what' }, what),
-      el('div', { class: `state ${s ? s.status : 'notrun'}`, title: s ? s.detail : '' }, s ? s.status[0].toUpperCase() + s.status.slice(1) : 'Not run'),
-      s ? el('div', { class: 'small' }, s.detail) : null);
-  })));
+  root.append(el('h2', {}, 'The workflow, from ingestion to evaluation'));
+  root.append(el('p', { class: 'muted' }, DATA.status ? `Each number below is explained under the diagram. Status comes from the last run, finished ${when(DATA.status.finished_at)}.` : 'Each number below is explained under the diagram. The workflow has not run yet.'));
+  root.append(el('div', { class: 'card scroll' }, flowDiagram()));
+  root.append(el('div', { class: 'steps' }, STEPS.map((step, i) => el('div', { class: 'stepRow' },
+    el('div', { class: 'stepNum' }, i + 1),
+    el('div', {}, el('h3', {}, step.title), el('p', {}, step.text),
+      el('ul', {}, step.points.map(point => el('li', {}, typeof point === 'function' ? point() : point))),
+      statusLine(step))))));
   root.append(el('h2', {}, 'How a number is calculated'));
   const example = el('div', {});
   const f = (...lines) => el('div', { class: 'formula' }, lines.join('\n'));
   root.append(el('div', { class: 'card' },
     el('h3', {}, '1. The target'), el('p', {}, 'At least one ACLED event inside the hotspot box, in the days after the issue date, with 10 or more fatalities or a sub-event type containing "territory".'),
-    el('h3', {}, '2. Baseline A: ACLED recent rate'), el('p', {}, 'k is the number of the trailing 12 months with a major event. The window ends 14 days before the issue date, to allow for reporting delay.'),
+    el('h3', {}, '2. The baseline: ACLED history alone'), el('p', {}, 'k is the number of the trailing 12 months with a major event. The window ends 14 days before the issue date, to allow for reporting delay.'),
     f('λ = (k + 0.5) / 12.5', 'p(h) = 1 − exp(−λ · h / 30)'),
-    el('h3', {}, '3. Baseline B: VIEWS'), el('p', {}, 'Use the newest run released before the issue date with input data at least two months old. Sum predicted deaths across grid cells in the box, prorated to the exact days. c is one coefficient fitted only on outcomes that resolved during 2022.'),
+    el('h3', {}, '3. The comparison: VIEWS'), el('p', {}, 'Use the newest run released before the issue date with input data at least two months old. Sum predicted deaths across grid cells in the box, prorated to the exact days. c is one coefficient fitted only on outcomes that resolved during 2022.'),
     f('E(h) = Σ cells Σ months  predicted deaths × share of month in window', 'p(h) = 1 − exp(−c · E(h))'),
-    el('h3', {}, '4. Choosing the reference'), el('p', {}, 'Both baselines are scored on 2023 onward. The one with the lower mean Brier score across the three horizons is frozen and becomes what X must beat.'),
-    el('h3', {}, '5. The X adjustment'), el('p', {}, 'Count unique authors per hotspot for event, control change, escalation and de-escalation posts. The weights are unlearned hypotheses, fixed in advance, and the effect fades with a 21-day time constant, so it moves the 30-day number most.'),
+    el('h3', {}, '4. Text signal from ACLED notes, backtested'), el('p', {}, 'In each hotspot, count notes with control-change, escalation and de-escalation cues in the 30 days before the cutoff. The weights are fixed in advance and not learned, and the adjustment works as in the next section.'),
+    f('m = exp(.35·ln(1+control) + .20·ln(1+escalation) − .30·ln(1+deescalation)), limited to 0.5–6'),
+    el('h3', {}, '5. Text signal from X, scored live'), el('p', {}, 'Count unique authors per hotspot for event, control change, escalation and de-escalation posts. The weights are unlearned hypotheses, fixed in advance, and the effect fades with a 21-day time constant, so it moves the 30-day number most.'),
     f('m = exp(.25·ln(1+events) + .15·ln(1+events48h) + .35·ln(1+control) + .20·ln(1+escalation) − .30·ln(1+deescalation)), limited to 0.5–6', 'a(h) = 1 + (m − 1) · (21 / h) · (1 − exp(−h / 21))', 'p_adjusted(h) = 1 − (1 − p_baseline(h)) ^ a(h)'),
     el('h3', {}, '6. Scoring'), el('p', {}, 'Brier is the mean squared gap between probability and outcome, so lower is better. Skill above zero means the forecast beat the baseline. Intervals resample consecutive periods, because overlapping forecasts are not independent.'),
     f('Brier = mean((p − outcome)²)', 'Skill = 1 − Brier_forecast / Brier_baseline'),
@@ -417,11 +484,10 @@ function renderHow() {
       const r = latest.rows.find(row => row.hotspot === pick.value);
       out.replaceChildren(f(
         `Issued ${latest.issued}, 30 days`,
-        `Recent rate:  λ = ${num(r.recent_rate)}  →  p = ${pct(r.p30_recent)}`,
-        `VIEWS:        E(30) = ${r.e30 === null ? 'n/a' : num(r.e30, 2)} deaths  →  p = ${pct(r.p30_views)}`,
-        `Reference:    ${latest.reference}  →  ${pct(r.p30_baseline)}`,
-        `X signal:     m = ${r.signal_multiplier} from ${drivers(r)}`,
-        `Published:    ${pct(r.p30)}`));
+        `Baseline:     λ = ${num(r.recent_rate)}  →  p = ${pct(r.p30_recent)}`,
+        `ACLED notes:  m = ${r.note_multiplier}  →  p = ${pct(r.p30_notes)}`,
+        `X posts:      m = ${r.signal_multiplier} from ${drivers(r)}  →  p = ${pct(r.p30)}`,
+        `VIEWS:        E(30) = ${r.e30 === null ? 'n/a' : num(r.e30, 2)} deaths  →  p = ${pct(r.p30_views)}`));
     };
     pick.addEventListener('change', draw);
     example.append(el('h3', {}, 'Worked example from the latest forecast'), el('label', {}, 'Hotspot ', pick), out);
@@ -434,9 +500,9 @@ function renderHow() {
   }
   root.append(el('h2', {}, 'Data sources'));
   root.append(table(['Source', 'Used for', 'Published here?'], [
-    [link('VIEWS', 'https://viewsforecasting.org'), 'External baseline, by dated production run', 'Aggregated grid map and hotspot totals'],
-    [link('ACLED', 'https://acleddata.com'), 'Outcomes and the recent-rate baseline', 'Aggregated scores only, never event rows'],
-    ['X recent search', 'The signal under test', 'Author counts per hotspot only, never post text or accounts'],
+    [link('VIEWS', 'https://viewsforecasting.org'), 'Outside comparison, by dated production run', 'Aggregated grid map and hotspot totals'],
+    [link('ACLED', 'https://acleddata.com'), 'Outcomes, the baseline, and notes as a text signal', 'Aggregated scores only, never event rows'],
+    ['X recent search', 'The live text signal under test', 'Author counts per hotspot only, never post text or accounts'],
   ], 9));
   root.append(el('h2', {}, 'Rules that protect the result'));
   root.append(el('ul', {}, [
@@ -445,12 +511,14 @@ function renderHow() {
     'Only the first run of each week counts, so a run cannot be repeated until it looks good.',
     'Missing VIEWS cells and unresolved outcomes stay missing and are never counted as zero.',
     'No conclusion about X before 26 weekly issues across six months.',
+    'The baseline was fixed before any score, so it cannot be swapped for whatever does best.',
   ].map(t => el('li', {}, t))));
   root.append(el('h2', {}, 'Known limits'));
   root.append(el('ul', {}, [
     'The 20 hotspots were chosen in 2026 knowing where fighting happened, so backtest scores are optimistic.',
     'ACLED is a revised snapshot. A date lag approximates what was known at the time but cannot reconstruct it.',
     'X volume reflects attention as much as violence, and partisan accounts on every side post victory claims.',
+    'ACLED notes are reviewed and may be revised, so a notes backtest can look better than real time. A notes result does not establish that X would do the same.',
     'The VIEWS coefficient is fitted on an older model version and on few months, so it may not transfer.',
     'These are research estimates, not operational warnings, and should not guide safety decisions.',
   ].map(t => el('li', {}, t))));

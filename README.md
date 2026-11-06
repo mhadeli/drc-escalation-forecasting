@@ -2,14 +2,16 @@
 
 **Live dashboard: [mhadeli.github.io/drc-escalation-forecasting](https://mhadeli.github.io/drc-escalation-forecasting/)**
 
-Do X posts add forecasting skill over a baseline that already exists?
+Do text signals beat a forecasting baseline built from ACLED history alone?
 
 For 20 DRC hotspots, this forecasts the probability of a major escalation within 30, 60 and 90 days. A major escalation is at least one ACLED event with 10+ fatalities or a territory change. The evaluation rules were fixed before the first score in [reports/prereg.md](reports/prereg.md).
 
-X recent search has no history, so the X signal can only be tested going forward. The backtest picks the baseline it has to beat:
+One workflow runs from ingestion to evaluation with two text sources, and compares the result with VIEWS:
 
-- **Recent rate:** each hotspot's own ACLED history over the trailing 12 months.
-- **VIEWS:** the VIEWS forecasts as they were published at the time, mapped to this target with one coefficient fitted on 2022.
+- **Baseline:** each hotspot's own ACLED history over the trailing 12 months, with no text. It is fixed in advance.
+- **ACLED notes:** a text signal backtested from 2023 onward, because notes have history.
+- **X posts:** a text signal scored live, because X recent search reaches back only 7 days.
+- **VIEWS:** an outside comparison, using forecasts as they were published at the time, mapped to this target with one coefficient fitted on 2022.
 
 ## Dashboard and automation
 
@@ -47,7 +49,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 # 2. Open config/hotspots.csv, check each drafted box, and set reviewed=1. The build refuses unreviewed boxes.
 
-# 3. Score the baselines. The first report freezes the reference baseline in history/reference.json.
+# 3. Backtest the baseline, ACLED notes and VIEWS. The first report freezes the VIEWS mapping in history/reference.json.
 .venv/bin/python pipeline.py build
 .venv/bin/python pipeline.py backtest
 .venv/bin/python pipeline.py publish
@@ -78,6 +80,7 @@ LLM extraction needs `pip install -r requirements-llm.txt` and a key in `.env`. 
 - **As-of:** a forecast at t uses ACLED events dated at least 14 days before t, with sensitivity checks at 7 and 28 days. ACLED is a revised snapshot, so this approximates what was known then and does not reconstruct it.
 - **VIEWS vintage:** only runs released before t, with input data at least two months old.
 - **VIEWS scale:** `fatalities001` publishes `ln(fatalities+1)` under different field names. `read_forecast` in `views.py` converts it to fatalities, and later versions already publish fatalities.
+- **Notes signal:** rule patterns only, because an LLM reading old text already knows what followed.
 - **Calibration:** the coefficient sees only outcomes that resolved during 2022.
 - **Missing is missing:** absent cells, months and unresolved outcomes are never treated as zero.
 - **Live scoring:** only resolved horizons count, and only the first run of each ISO week. Conclusions wait for 26 weekly issues across six months.

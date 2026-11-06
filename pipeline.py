@@ -63,7 +63,7 @@ def preflight(issue):
     """Everything a live forecast needs, checked before any paid API call."""
     path = HISTORY / 'reference.json'
     if not path.exists():
-        raise ValueError('No frozen reference baseline. Run build and backtest first.')
+        raise ValueError('No frozen reference from the backtest. Run build and backtest first.')
     reference = json.loads(path.read_text())
     if reference['hotspots_sha256'] != acled.boxes_hash():
         raise ValueError('config/hotspots.csv changed after the reference baseline was frozen.')
@@ -73,7 +73,7 @@ def preflight(issue):
         raise ValueError(f"ACLED covers {meta['coverage_start']} to {meta['coverage_end']}; "
                          f'issue {issue} needs {acled.month_shift(cutoff, -12)} to {cutoff}. Import a newer export.')
     boxes = acled.load_boxes()
-    return reference, meta, boxes, acled.major_dates(events, boxes)
+    return reference, meta, boxes, acled.major_dates(events, boxes), acled.note_history(events, boxes)
 
 
 def post_time(post):
@@ -130,7 +130,7 @@ def health(summary, tagged, rows):
 
 def brief(saved, checks, tagged):
     lines = [f"# DRC escalation watch, issued {saved['issued']}", '',
-             f"Target: {fc.TARGET}. Baseline: {saved['reference']}. The X adjustment is an untested hypothesis, "
+             f"Target: {fc.TARGET}. Baseline: ACLED history. The X adjustment is an untested hypothesis, "
              'so compare each number with its baseline.', '',
              '| Hotspot | 30 days | Baseline | 60 days | 90 days | Signal: events, control, escalation, de-escalation |',
              '|---|---:|---:|---:|---:|---|']
@@ -159,8 +159,8 @@ def run(fetch_posts=False, posts_file=None, extractor='rules', target=1000):
         summary = x.latest_summary()
         posts = x.read_jsonl(summary['posts_file'])
     issue = x.now().date() if fetch_posts else date.fromisoformat(summary['retrieved_at'][:10])
-    reference, meta, boxes, dates = preflight(issue)
-    baselines = backtest.live_baselines(issue, dates, boxes, reference)  # Fails here, before X credits are spent.
+    reference, meta, boxes, dates, notes = preflight(issue)
+    baselines = backtest.live_baselines(issue, dates, boxes, reference, notes)  # Fails here, before X credits are spent.
     if fetch_posts:
         token = x.load_env().get('X_BEARER_TOKEN')
         if not token:
@@ -240,10 +240,10 @@ def score(draws=1000):
                 continue
             brier = lambda key: float(np.mean([(row[key] - y) ** 2 for row, y in resolved_rows]))
             scores[f'p{h}'] = {'n': len(resolved_rows), 'positives': sum(y for _, y in resolved_rows),
-                               'brier_model': brier(f'p{h}'), 'brier_baseline': brier(f'p{h}_baseline')}
+                               'brier_model': brier(f'p{h}'), 'brier_baseline': brier(f'p{h}_baseline'), 'brier_notes': brier(f'p{h}_notes')}
             if first:
-                cases[h] += [{'issue': saved['issued'], 'p': row[f'p{h}'], 'baseline': row[f'p{h}_baseline'], 'outcome': y}
-                             for row, y in resolved_rows]
+                cases[h] += [{'issue': saved['issued'], 'p': row[f'p{h}'], 'baseline': row[f'p{h}_baseline'], 'notes': row[f'p{h}_notes'],
+                              'views': row[f'p{h}_views'], 'outcome': y} for row, y in resolved_rows]
         x.write_json(path.parent / 'scores.json', {'run_id': saved['run_id'], 'resolved_through': resolved.isoformat(),
                      'acled_sha256': meta['sha256'], 'acled_retrieved_at': meta['retrieved_at'], 'scores': scores})
     summary = {'resolved_through': resolved.isoformat(), 'acled_sha256': meta['sha256'], 'horizons': {}}
@@ -253,9 +253,15 @@ def score(draws=1000):
         issues = sorted({c['issue'] for c in rows})
         model = float(np.mean([(c['p'] - c['outcome']) ** 2 for c in rows]))
         base = float(np.mean([(c['baseline'] - c['outcome']) ** 2 for c in rows]))
+        notes = float(np.mean([(c['notes'] - c['outcome']) ** 2 for c in rows]))
+        paired = [c for c in rows if c['views'] is not None]
+        paired_base = float(np.mean([(c['baseline'] - c['outcome']) ** 2 for c in paired])) if paired else None
+        views_brier = float(np.mean([(c['views'] - c['outcome']) ** 2 for c in paired])) if paired else None
         spans_six = acled.month_shift(date.fromisoformat(issues[0]), 6) <= date.fromisoformat(issues[-1])
         summary['horizons'][str(h)] = {'issues': len(issues), 'forecasts': len(rows), 'brier_model': model, 'brier_baseline': base,
                                        'skill': 1 - model / base if base > 0 else None, 'skill_90': skill_interval(rows, h, draws),
+                                       'brier_notes': notes, 'skill_notes': 1 - notes / base if base > 0 else None, 'brier_views': views_brier,
+                                       'skill_views': 1 - views_brier / paired_base if paired_base else None,
                                        'conclusive': len(issues) >= 26 and spans_six}
     x.write_json(HISTORY / 'live_scores.json', summary)
     return summary
@@ -268,7 +274,7 @@ def publish():
     if reports:
         target = HISTORY / 'backtest'
         target.mkdir(parents=True, exist_ok=True)
-        for name in ('scores.json', 'hotspots.json', 'reliability_recent.png', 'reliability_views.png'):
+        for name in ('scores.json', 'hotspots.json', 'reliability_recent.png', 'reliability_text.png', 'reliability_views.png'):
             shutil.copyfile(reports[-1].parent / name, target / name)
         published.append(target)
     if (views.OUT / 'catalog.json').exists():
@@ -304,7 +310,7 @@ def orchestrate(pull_x=False, extractor='rules', rebuild=False, pause=3, since='
         if not snapshot.exists():
             raise Skip('Needs ACLED.')
         if reference.exists() and not rebuild:
-            raise Skip('The reference baseline is already frozen; pass --rebuild to report on a newer snapshot.')
+            raise Skip('The backtest report exists and the mapping is frozen; pass --rebuild to report on a newer snapshot.')
         try:
             acled.load_boxes()
         except ValueError as error:
@@ -318,12 +324,12 @@ def orchestrate(pull_x=False, extractor='rules', rebuild=False, pause=3, since='
         if not x.load_env().get('X_BEARER_TOKEN'):
             raise Skip('No X_BEARER_TOKEN set.')
         if not reference.exists():
-            raise Skip('Needs a frozen reference baseline.')
+            raise Skip('Needs the backtest first.')
         return f'Run {run(True, None, extractor).name} with {extractor}.'
 
     def stage_score():
         if not (snapshot.exists() and reference.exists()):
-            raise Skip('Needs ACLED and a frozen reference baseline.')
+            raise Skip('Needs ACLED and the backtest.')
         horizons = score()['horizons']
         return f'{sum(h["forecasts"] for h in horizons.values())} resolved forecasts.' if horizons else 'No forecast has resolved yet.'
 
