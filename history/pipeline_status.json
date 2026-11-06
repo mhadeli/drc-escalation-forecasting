@@ -1,0 +1,41 @@
+{
+  "finished_at": "2026-11-06T22:13:36+00:00",
+  "stages": [
+    {
+      "stage": "VIEWS",
+      "status": "done",
+      "detail": "61 dated runs cached.",
+      "at": "2026-11-06T22:13:36+00:00"
+    },
+    {
+      "stage": "ACLED",
+      "status": "skipped",
+      "detail": "No ACLED credentials or export yet, so nothing that needs ACLED can run.",
+      "at": "2026-11-06T22:13:36+00:00"
+    },
+    {
+      "stage": "Backtest",
+      "status": "skipped",
+      "detail": "Needs ACLED.",
+      "at": "2026-11-06T22:13:36+00:00"
+    },
+    {
+      "stage": "Forecast",
+      "status": "skipped",
+      "detail": "The X pull is off, because it costs credits.",
+      "at": "2026-11-06T22:13:36+00:00"
+    },
+    {
+      "stage": "Score",
+      "status": "skipped",
+      "detail": "Needs ACLED and a frozen reference baseline.",
+      "at": "2026-11-06T22:13:36+00:00"
+    },
+    {
+      "stage": "Publish",
+      "status": "done",
+      "detail": "Updated: views_map.json.",
+      "at": "2026-11-06T22:13:36+00:00"
+    }
+  ]
+}

@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DRC Escalation Forecasting</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --border: #e3e2dc; --grid: #ecebe6;
+  --text: #0b0b0b; --text-2: #52514e; --text-3: #6f6e69;
+  --forecast: #2a78d6; --views: #eb6834; --recent: #1baf7a; --neutral: #8a8984;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #111110; --surface: #1a1a19; --border: #34342f; --grid: #2a2a27;
+    --text: #f0efec; --text-2: #c3c2b7; --text-3: #9c9b92;
+    --forecast: #3987e5; --views: #d95926; --recent: #199e70; --neutral: #8a8984;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main, header, nav.tabs { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+header { padding-top: 28px; }
+h1 { font-size: 26px; margin: 0 0 4px; font-weight: 650; }
+h2 { font-size: 19px; margin: 28px 0 8px; font-weight: 620; }
+h3 { font-size: 15px; margin: 18px 0 4px; font-weight: 620; }
+p { margin: 6px 0 12px; max-width: 76ch; }
+a { color: inherit; }
+.muted { color: var(--text-2); }
+.small { font-size: 13px; color: var(--text-3); }
+nav.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 18px; border-bottom: 1px solid var(--border); }
+nav.tabs button { font: inherit; padding: 8px 14px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-2); cursor: pointer; }
+nav.tabs button[aria-selected=true] { color: var(--text); border-color: var(--text); font-weight: 600; }
+section[role=tabpanel] { display: none; padding: 8px 0 48px; }
+section[role=tabpanel].on { display: block; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 12px 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 14px 0; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.tile .label { font-size: 13px; color: var(--text-2); }
+.tile .value { font-size: 24px; font-weight: 620; line-height: 1.25; margin: 2px 0; }
+.tile .note { font-size: 13px; color: var(--text-3); }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 6px 10px; border-bottom: 1px solid var(--grid); text-align: left; vertical-align: top; }
+th { color: var(--text-2); font-weight: 600; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.controls { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin: 10px 0; font-size: 14px; }
+select { font: inherit; padding: 4px 8px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; max-width: 100%; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--text-2); margin: 6px 0; }
+.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.legend i.bar { width: 3px; height: 13px; border-radius: 1px; vertical-align: -2px; background: var(--text-2); }
+#map { height: 600px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); }
+.leaflet-container { font: inherit; }
+.scale { height: 10px; width: 180px; border-radius: 3px; background: linear-gradient(to right, rgba(235,104,52,.08), rgba(235,104,52,.85)); display: inline-block; vertical-align: -1px; margin: 0 6px; }
+.flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 12px 0; }
+.step { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; position: relative; }
+.step b { display: block; font-size: 14px; }
+.step .what { font-size: 13px; color: var(--text-2); margin: 4px 0 8px; }
+.state { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.state::before { margin-right: 4px; }
+.state.done::before { content: "✓"; }
+.state.skipped::before { content: "–"; }
+.state.failed::before { content: "✕"; }
+.state.notrun::before { content: "○"; }
+.formula { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; background: var(--page); border: 1px solid var(--grid); border-radius: 6px; padding: 8px 12px; margin: 6px 0 10px; overflow-x: auto; white-space: pre-wrap; }
+.notice { border-left: 3px solid var(--text-3); padding: 8px 14px; background: var(--surface); margin: 12px 0; font-size: 14px; }
+svg text { fill: var(--text-2); font: 12px system-ui, sans-serif; }
+#tip { position: fixed; pointer-events: none; display: none; z-index: 2000; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,.18); max-width: 300px; }
+img.plot { width: 100%; background: #fff; border-radius: 6px; margin: 6px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DRC Escalation Forecasting</h1>
+  <p class="muted">Do posts on X add forecasting skill over a baseline that already exists? For 20 hotspots in the Democratic Republic of the Congo, this tracks the probability of a major escalation within 30, 60 and 90 days.</p>
+</header>
+<nav class="tabs" role="tablist" id="tabs"></nav>
+<main>
+  <section role="tabpanel" id="results"></section>
+  <section role="tabpanel" id="mapTab">
+    <div class="controls" id="mapControls"></div>
+    <div id="map"></div>
+    <div class="legend" id="mapLegend"></div>
+    <p class="small" id="mapNote"></p>
+  </section>
+  <section role="tabpanel" id="compare"></section>
+  <section role="tabpanel" id="how"></section>
+  <section role="tabpanel" id="health"></section>
+</main>
+<div id="tip" role="status"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const DATA = /*DATA*/null;
+const latest = DATA.runs.length ? DATA.runs[DATA.runs.length - 1] : null;
+const SERIES = {
+  p: { label: 'X-adjusted forecast', color: 'var(--forecast)' },
+  views: { label: 'VIEWS mapped to target', color: 'var(--views)' },
+  recent: { label: 'ACLED recent rate', color: 'var(--recent)' },
+};
+const STEPS = [
+  ['VIEWS', 'Cache every dated VIEWS run for DRC grid cells, with its release date.'],
+  ['ACLED', 'Import DRC events. They set the outcomes and the recent-rate baseline.'],
+  ['Backtest', 'Replay monthly issues from 2023. Score both baselines and freeze the better one.'],
+  ['Forecast', 'Pull X posts, extract signals, and adjust the frozen baseline.'],
+  ['Score', 'When a horizon passes, compare forecast and baseline with what ACLED recorded.'],
+  ['Publish', 'Commit post-free results, then rebuild this page.'],
+];
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (key === 'class') node.className = value;
+    else if (key === 'html') throw new Error('no raw html');
+    else node.setAttribute(key, value);
+  }
+  for (const child of children.flat()) {
+    if (child !== null && child !== undefined) node.append(child.nodeType ? child : String(child));
+  }
+  return node;
+}
+function svgEl(tag, attrs, ...children) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [key, value] of Object.entries(attrs || {})) node.setAttribute(key, value);
+  for (const child of children) node.append(child.nodeType ? child : String(child));
+  return node;
+}
+const pct = v => v === null || v === undefined ? 'n/a' : `${Math.round(v * 100)}%`;
+const num = (v, d = 3) => v === null || v === undefined ? 'n/a' : Number(v).toFixed(d);
+const pts = v => `${v >= 0 ? '+' : '−'}${Math.abs(Math.round(v * 100))} pts`;
+const short = name => name.split(' (')[0];
+const when = iso => `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+
+function table(headers, rows, numericFrom = 1, textCols = []) {
+  const cls = i => i >= numericFrom && !textCols.includes(i) ? 'n' : '';
+  return el('div', { class: 'scroll' }, el('table', {},
+    el('thead', {}, el('tr', {}, headers.map((h, i) => el('th', { class: cls(i), scope: 'col' }, h)))),
+    el('tbody', {}, rows.map(row => el('tr', {}, row.map((v, i) => el('td', { class: cls(i) }, v)))))));
+}
+const tip = document.getElementById('tip');
+function showTip(event, lines) {
+  tip.replaceChildren(...lines.map(line => el('div', {}, line)));
+  tip.style.display = 'block';
+  tip.style.left = `${Math.min(event.clientX + 14, innerWidth - 310)}px`;
+  tip.style.top = `${event.clientY + 14}px`;
+}
+const hideTip = () => { tip.style.display = 'none'; };
+function legend(keys) {
+  return el('div', { class: 'legend' }, keys.map(k => el('span', {}, el('i', { style: `background:${SERIES[k].color}` }), SERIES[k].label)));
+}
+function stageOf(name) { return DATA.status ? DATA.status.stages.find(s => s.stage === name) : null; }
+
+/* Results */
+function renderResults() {
+  const root = document.getElementById('results');
+  const horizons = DATA.live ? DATA.live.horizons : {};
+  const h30 = horizons['30'];
+  let answer, note;
+  if (h30) {
+    answer = h30.conclusive ? (h30.skill_90 && h30.skill_90[0] > 0 ? 'Yes, at 30 days' : 'Not shown') : 'Too early';
+    note = `Skill ${num(h30.skill)} across ${h30.issues} weekly issues. A conclusion needs 26 across six months.`;
+  } else {
+    answer = 'Not known yet';
+    note = latest ? `The earliest 30-day forecast resolves on ${latest.resolve_by.p30}.` : 'No forecast has been issued by this pipeline yet.';
+  }
+  const bt = DATA.backtest;
+  root.append(el('div', { class: 'tiles' },
+    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Does X add skill?'), el('div', { class: 'value' }, answer), el('div', { class: 'note' }, note)),
+    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Baseline X has to beat'), el('div', { class: 'value' }, DATA.reference ? (DATA.reference.baseline === 'views' ? 'VIEWS' : 'Recent rate') : 'Not chosen yet'),
+      el('div', { class: 'note' }, bt ? `Lower mean Brier, resolved through ${bt.panel.resolved_through}. Chosen on the same data it is scored on.` : 'Needs the ACLED backtest.')),
+    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Latest forecast'), el('div', { class: 'value' }, latest ? latest.issued : 'None yet'),
+      el('div', { class: 'note' }, latest ? `Extractor: ${latest.extractor.model || latest.extractor.extractor}` : 'Needs a frozen baseline and an X pull.'))));
+  if (!bt && !latest) {
+    root.append(el('div', { class: 'notice' }, 'No results yet. The VIEWS data is loaded and shown on the Map tab. Scores and forecasts appear here once ACLED data is available. The How it works tab shows the status of each stage.'));
+  }
+  if (latest) {
+    root.append(el('h2', {}, `Forecasts issued ${latest.issued}`));
+    root.append(el('p', { class: 'muted' }, 'Probability of at least one ACLED event with 10+ fatalities or a territory change. The X adjustment is an untested hypothesis, so read each number beside its baseline.'));
+    root.append(table(['Hotspot', '30 days', 'Baseline', 'Change', '60 days', '90 days', 'Why it moved'], latest.rows.map(r => [
+      short(r.hotspot), pct(r.p30), pct(r.p30_baseline), pts(r.p30 - r.p30_baseline), pct(r.p60), pct(r.p90), drivers(r)]), 1, [6]));
+  }
+  if (Object.keys(horizons).length) {
+    root.append(el('h2', {}, 'X-adjusted forecast against baseline, resolved forecasts only'));
+    root.append(table(['Days', 'Weekly issues', 'Forecasts', 'Brier forecast', 'Brier baseline', 'Skill', '90% interval', 'Status'],
+      Object.entries(horizons).map(([h, s]) => [h, s.issues, s.forecasts, num(s.brier_model), num(s.brier_baseline), num(s.skill),
+        s.skill_90 ? `${num(s.skill_90[0])} to ${num(s.skill_90[1])}` : 'n/a', s.conclusive ? 'Conclusive' : 'Interim']), 0, [7]));
+  }
+}
+function drivers(r) {
+  const parts = [];
+  if (r.control_change) parts.push(`${r.control_change} authors on control changes`);
+  if (r.event) parts.push(`${r.event} on events`);
+  if (r.escalation) parts.push(`${r.escalation} on escalation`);
+  if (r.deescalation) parts.push(`${r.deescalation} on de-escalation`);
+  return parts.length ? parts.join(', ') : 'No signal in this pull';
+}
+
+/* Map */
+let map, gridLayer, spotLayer;
+function renderMapControls() {
+  const box = document.getElementById('mapControls');
+  const measure = el('select', { id: 'measure', 'aria-label': 'Hotspot measure' });
+  const options = latest ? [['p', 'X-adjusted forecast'], ['views', 'VIEWS mapped to target'], ['recent', 'ACLED recent rate'], ['diff', 'X change from baseline']] : [['none', 'Locations only']];
+  options.forEach(([v, t]) => measure.append(el('option', { value: v }, t)));
+  const horizon = el('select', { id: 'mapH', 'aria-label': 'Horizon' });
+  [30, 60, 90].forEach(h => horizon.append(el('option', { value: h }, `${h} days`)));
+  const grid = el('input', { type: 'checkbox', id: 'gridOn', checked: '' });
+  box.append(el('label', {}, 'Hotspots show ', measure));
+  if (latest) box.append(el('label', {}, ' over ', horizon));
+  box.append(el('label', {}, grid, ' VIEWS grid'));
+  [measure, horizon, grid].forEach(c => c.addEventListener('change', drawMap));
+}
+function initMap() {
+  if (map || !window.L) {
+    if (!window.L) document.getElementById('map').textContent = 'The map library could not load.';
+    return;
+  }
+  map = L.map('map', { scrollWheelZoom: false, preferCanvas: false }).setView([-1.2, 26], 6);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 11, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+  gridLayer = L.layerGroup().addTo(map);
+  spotLayer = L.layerGroup().addTo(map);
+  drawMap();
+}
+function drawMap() {
+  if (!map) return;
+  gridLayer.clearLayers();
+  spotLayer.clearLayers();
+  const v = DATA.views;
+  const showGrid = document.getElementById('gridOn').checked;
+  if (v && showGrid) {
+    const top = Math.max(...v.cells.map(c => c[2]));
+    const scale = e => Math.log1p(e) / Math.log1p(top);
+    for (const [lat, lon, e] of v.cells) {
+      if (e < .05) continue;
+      L.rectangle([[lat - .25, lon - .25], [lat + .25, lon + .25]], { stroke: false, fillColor: '#eb6834', fillOpacity: .08 + .72 * scale(e) })
+        .bindTooltip(`VIEWS: ${e.toFixed(1)} expected state-based deaths, next 3 months`, { sticky: true }).addTo(gridLayer);
+    }
+  }
+  const measure = document.getElementById('measure').value;
+  const h = latest ? document.getElementById('mapH').value : 30;
+  const rows = latest ? Object.fromEntries(latest.rows.map(r => [r.hotspot, r])) : {};
+  for (const [name, centre] of Object.entries(DATA.centres)) {
+    const box = DATA.boxes[name];
+    if (box) L.rectangle([[box.bounds[0], box.bounds[1]], [box.bounds[2], box.bounds[3]]], { color: '#52514e', weight: 1, fill: false, dashArray: box.reviewed ? null : '4 3' }).addTo(spotLayer);
+    const r = rows[name];
+    let value = null, color = '#0b0b0b', radius = 5, text = short(name);
+    if (r && measure !== 'none') {
+      const base = r[`p${h}_baseline`];
+      value = measure === 'p' ? r[`p${h}`] : measure === 'views' ? r[`p${h}_views`] : measure === 'recent' ? r[`p${h}_recent`] : r[`p${h}`] - base;
+      if (value !== null) {
+        if (measure === 'diff') { radius = 5 + Math.abs(value) * 40; color = value >= 0 ? '#eb6834' : '#2a78d6'; text = `${short(name)}: ${pts(value)}`; }
+        else { radius = 5 + value * 16; color = measure === 'p' ? '#2a78d6' : measure === 'views' ? '#eb6834' : '#1baf7a'; text = `${short(name)}: ${pct(value)}`; }
+      } else text = `${short(name)}: no forecast`;
+    }
+    const marker = L.circleMarker(centre, { radius, color: '#fff', weight: 2, fillColor: color, fillOpacity: .9 }).addTo(spotLayer);
+    marker.bindTooltip(text, { sticky: true });
+    const popup = el('div', {}, el('b', {}, name));
+    if (r) popup.append(el('div', {}, `X-adjusted ${pct(r[`p${h}`])} · VIEWS ${pct(r[`p${h}_views`])} · recent ${pct(r[`p${h}_recent`])}`), el('div', {}, drivers(r)));
+    else popup.append(el('div', {}, DATA.hotspots && DATA.hotspots[name] ? `${DATA.hotspots[name]['90'].positives} of ${DATA.hotspots[name]['90'].n} backtest months had a major event within 90 days.` : 'No forecast yet.'));
+    marker.bindPopup(popup);
+  }
+  const key = document.getElementById('mapLegend');
+  key.replaceChildren();
+  if (v && showGrid) key.append(el('span', {}, 'VIEWS expected deaths, 3 months: 0', el('span', { class: 'scale' }), `${Math.max(...v.cells.map(c => c[2])).toFixed(0)} (log scale)`));
+  key.append(el('span', {}, el('i', { style: `background:${{ p: '#2a78d6', views: '#eb6834', recent: '#1baf7a', diff: '#eb6834' }[measure] || '#0b0b0b'}` }), measure === 'none' ? 'Hotspot' : measure === 'diff' ? 'Orange raises, blue lowers; size shows the change' : 'Hotspot; size shows the probability'));
+  document.getElementById('mapNote').textContent = (v ? `VIEWS grid from run ${v.run}, released ${v.released}: state-based deaths per 0.5° cell, ${v.total} in total for the DRC over the next three months. ` : '') +
+    'Hotspot dots mark approximate territory centres. Scored areas are the boxes in config/hotspots.csv, drawn as outlines once they exist; dashed outlines are not reviewed yet.';
+}
+
+/* Comparison */
+function dotPlot(rows, h) {
+  const row = 26, left = 170, right = 36, top = 26, width = Math.max(document.getElementById('compare').clientWidth || 900, 560);
+  const height = top + rows.length * row + 8;
+  const x = v => left + v * (width - left - right);
+  const svg = svgEl('svg', { width, height, role: 'img', 'aria-label': `Forecast, VIEWS and recent rate by hotspot at ${h} days` });
+  for (const t of [0, .25, .5, .75, 1]) {
+    svg.append(svgEl('line', { x1: x(t), x2: x(t), y1: top - 6, y2: height - 4, stroke: 'var(--grid)' }));
+    svg.append(svgEl('text', { x: x(t), y: 14, 'text-anchor': 'middle' }, pct(t)));
+  }
+  rows.forEach((r, i) => {
+    const y = top + i * row + row / 2;
+    svg.append(svgEl('text', { x: left - 10, y: y + 4, 'text-anchor': 'end' }, short(r.hotspot).slice(0, 22)));
+    const values = { recent: r[`p${h}_recent`], views: r[`p${h}_views`], p: r[`p${h}`] };
+    const present = Object.values(values).filter(v => v !== null);
+    if (present.length > 1) svg.append(svgEl('line', { x1: x(Math.min(...present)), x2: x(Math.max(...present)), y1: y, y2: y, stroke: 'var(--border)', 'stroke-width': 2 }));
+    for (const key of ['recent', 'views', 'p']) {
+      if (values[key] === null) continue;
+      svg.append(svgEl('circle', { cx: x(values[key]), cy: y, r: 5, fill: SERIES[key].color, stroke: 'var(--surface)', 'stroke-width': 2 }));
+    }
+    const hit = svgEl('rect', { x: 0, y: y - row / 2, width, height: row, fill: 'transparent' });
+    hit.addEventListener('mousemove', e => showTip(e, [short(r.hotspot), ...Object.keys(SERIES).map(k => `${SERIES[k].label}: ${pct(values[k])}`)]));
+    hit.addEventListener('mouseleave', hideTip);
+    svg.append(hit);
+  });
+  return svg;
+}
+function lineChart(series) {
+  const width = Math.max(document.getElementById('compare').clientWidth || 900, 560), height = 280, left = 42, right = 16, top = 12, bottom = 44;
+  const x = i => left + i * (width - left - right) / Math.max(series.length - 1, 1);
+  const y = v => top + (1 - v) * (height - top - bottom);
+  const svg = svgEl('svg', { width, height, role: 'img', 'aria-label': 'Monthly baseline probabilities and outcomes' });
+  for (const t of [0, .25, .5, .75, 1]) {
+    svg.append(svgEl('line', { x1: left, x2: width - right, y1: y(t), y2: y(t), stroke: 'var(--grid)' }));
+    svg.append(svgEl('text', { x: left - 8, y: y(t) + 4, 'text-anchor': 'end' }, pct(t)));
+  }
+  series.forEach((s, i) => {
+    if (s[0].endsWith('-01-01')) svg.append(svgEl('text', { x: x(i), y: height - 8, 'text-anchor': 'middle' }, s[0].slice(0, 4)));
+    if (s[3]) svg.append(svgEl('rect', { x: x(i) - 1.5, y: height - bottom + 4, width: 3, height: 13, fill: 'var(--text-2)', rx: 1 }));
+  });
+  [['recent', 1], ['views', 2]].forEach(([key, index]) => svg.append(svgEl('polyline', {
+    points: series.map((s, i) => `${x(i)},${y(s[index])}`).join(' '), fill: 'none', stroke: SERIES[key].color, 'stroke-width': 2, 'stroke-linejoin': 'round' })));
+  const cross = svgEl('line', { y1: top, y2: height - bottom, stroke: 'var(--neutral)', visibility: 'hidden' });
+  svg.append(cross);
+  const hit = svgEl('rect', { x: left, y: 0, width: width - left - right, height, fill: 'transparent' });
+  hit.addEventListener('mousemove', e => {
+    const box = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(series.length - 1, Math.round((e.clientX - box.left - left) / (width - left - right) * (series.length - 1))));
+    const s = series[i];
+    cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
+    showTip(e, [`Issued ${s[0]}`, `${SERIES.recent.label}: ${pct(s[1])}`, `${SERIES.views.label}: ${pct(s[2])}`, s[3] ? 'A major event followed' : 'No major event followed']);
+  });
+  hit.addEventListener('mouseleave', () => { hideTip(); cross.setAttribute('visibility', 'hidden'); });
+  svg.append(hit);
+  return svg;
+}
+function renderCompare() {
+  const root = document.getElementById('compare');
+  root.replaceChildren();
+  root.append(el('p', { class: 'muted' }, 'VIEWS predicts state-based UCDP deaths. Our target is any ACLED event with 10+ fatalities or a territory change. To compare them, expected VIEWS deaths in each box become a probability through one coefficient fitted on 2022. That mapping is ours, not a VIEWS product, and the different target puts VIEWS at a disadvantage.'));
+  if (!latest && !DATA.backtest) {
+    root.append(el('div', { class: 'notice' }, 'The comparison needs ACLED outcomes, which are not loaded yet. The VIEWS forecast itself is on the Map tab.'));
+    return;
+  }
+  const horizon = el('select', { 'aria-label': 'Horizon' });
+  [30, 60, 90].forEach(h => horizon.append(el('option', { value: h }, `${h} days`)));
+  root.append(el('div', { class: 'controls' }, el('label', {}, 'Horizon ', horizon)));
+  const body = el('div', {});
+  root.append(body);
+  const draw = () => {
+    const h = horizon.value;
+    body.replaceChildren();
+    if (latest) {
+      const rows = [...latest.rows].sort((a, b) => b[`p${h}`] - a[`p${h}`]);
+      body.append(el('h2', {}, `Latest forecast by hotspot, issued ${latest.issued}`), legend(['p', 'views', 'recent']),
+        el('div', { class: 'card scroll' }, dotPlot(rows, h)),
+        table(['Hotspot', 'X-adjusted', 'VIEWS', 'Recent rate', 'Reference'], rows.map(r => [short(r.hotspot), pct(r[`p${h}`]), pct(r[`p${h}_views`]), pct(r[`p${h}_recent`]), pct(r[`p${h}_baseline`])])));
+    }
+    if (DATA.hotspots) {
+      const names = Object.keys(DATA.hotspots);
+      const pick = el('select', { 'aria-label': 'Hotspot' });
+      names.forEach(n => pick.append(el('option', { value: n }, short(n))));
+      const chart = el('div', { class: 'card scroll' });
+      const plot = () => {
+        const entry = DATA.hotspots[pick.value][h];
+        chart.replaceChildren(
+          entry.series.length ? lineChart(entry.series) : el('p', {}, 'No paired months for this hotspot. Its box may be too small to contain a VIEWS cell centre.'),
+          el('p', { class: 'small' }, `Brier: recent rate ${num(entry.brier_recent)}, VIEWS ${num(entry.brier_views)}. Lower is better. ${entry.positives} of ${entry.n} months had a major event within ${h} days.`));
+      };
+      pick.addEventListener('change', plot);
+      body.append(el('h2', {}, 'Baselines against what happened, 2023 onward'), el('div', { class: 'controls' }, el('label', {}, 'Hotspot ', pick)),
+        el('div', { class: 'legend' }, el('span', {}, el('i', { style: `background:${SERIES.views.color}` }), SERIES.views.label), el('span', {}, el('i', { style: `background:${SERIES.recent.color}` }), SERIES.recent.label), el('span', {}, el('i', { class: 'bar' }), 'A major event followed')), chart);
+      plot();
+    }
+    if (DATA.backtest) {
+      const rows = DATA.backtest.scores['14'].filter(s => s.horizon === Number(h)).map(s => {
+        const ci = s.intervals.skill_views;
+        return [s.split, s.n, s.positives, num(s.brier_recent), num(s.brier_views), num(s.skill_views), ci ? `${num(ci[0])} to ${num(ci[1])}` : 'n/a', num(s.auc_recent), num(s.auc_views)];
+      });
+      body.append(el('h2', {}, 'Scoreboard, all paired cases'),
+        el('p', { class: 'muted' }, 'Positive VIEWS skill means VIEWS beat the recent rate on Brier score. Onsets are months with no major event in the prior six, the hardest and most useful cases.'),
+        table(['Split', 'N', 'Major', 'Brier recent', 'Brier VIEWS', 'VIEWS skill', '90% interval', 'AUC recent', 'AUC VIEWS'], rows));
+      body.append(el('h2', {}, 'Can the probabilities be trusted?'), el('p', { class: 'muted' }, 'A calibrated forecast sits on the dashed line: events given 40% happen about 40% of the time.'));
+      for (const [key, label] of [['recent', 'Recent rate calibration'], ['views', 'VIEWS mapping calibration']]) {
+        if (DATA.plots[key]) body.append(el('img', { class: 'plot', src: DATA.plots[key], alt: label }));
+      }
+    }
+  };
+  horizon.addEventListener('change', draw);
+  draw();
+}
+
+/* How it works */
+function renderHow() {
+  const root = document.getElementById('how');
+  root.append(el('h2', {}, 'The workflow'));
+  root.append(el('p', { class: 'muted' }, DATA.status ? `A GitHub Actions run executes these stages in order. Status from the last run, finished ${when(DATA.status.finished_at)}.` : 'A GitHub Actions run executes these stages in order. It has not run yet.'));
+  root.append(el('div', { class: 'flow' }, STEPS.map(([name, what], i) => {
+    const s = stageOf(name);
+    return el('div', { class: 'step' }, el('b', {}, `${i + 1}. ${name}`), el('div', { class: 'what' }, what),
+      el('div', { class: `state ${s ? s.status : 'notrun'}`, title: s ? s.detail : '' }, s ? s.status[0].toUpperCase() + s.status.slice(1) : 'Not run'),
+      s ? el('div', { class: 'small' }, s.detail) : null);
+  })));
+  root.append(el('h2', {}, 'How a number is calculated'));
+  const example = el('div', {});
+  const f = (...lines) => el('div', { class: 'formula' }, lines.join('\n'));
+  root.append(el('div', { class: 'card' },
+    el('h3', {}, '1. The target'), el('p', {}, 'At least one ACLED event inside the hotspot box, in the days after the issue date, with 10 or more fatalities or a sub-event type containing "territory".'),
+    el('h3', {}, '2. Baseline A: ACLED recent rate'), el('p', {}, 'k is the number of the trailing 12 months with a major event. The window ends 14 days before the issue date, to allow for reporting delay.'),
+    f('λ = (k + 0.5) / 12.5', 'p(h) = 1 − exp(−λ · h / 30)'),
+    el('h3', {}, '3. Baseline B: VIEWS'), el('p', {}, 'Use the newest run released before the issue date with input data at least two months old. Sum predicted deaths across grid cells in the box, prorated to the exact days. c is one coefficient fitted only on outcomes that resolved during 2022.'),
+    f('E(h) = Σ cells Σ months  predicted deaths × share of month in window', 'p(h) = 1 − exp(−c · E(h))'),
+    el('h3', {}, '4. Choosing the reference'), el('p', {}, 'Both baselines are scored on 2023 onward. The one with the lower mean Brier score across the three horizons is frozen and becomes what X must beat.'),
+    el('h3', {}, '5. The X adjustment'), el('p', {}, 'Count unique authors per hotspot for event, control change, escalation and de-escalation posts. The weights are unlearned hypotheses, fixed in advance, and the effect fades with a 21-day time constant, so it moves the 30-day number most.'),
+    f('m = exp(.25·ln(1+events) + .15·ln(1+events48h) + .35·ln(1+control) + .20·ln(1+escalation) − .30·ln(1+deescalation)), limited to 0.5–6', 'a(h) = 1 + (m − 1) · (21 / h) · (1 − exp(−h / 21))', 'p_adjusted(h) = 1 − (1 − p_baseline(h)) ^ a(h)'),
+    el('h3', {}, '6. Scoring'), el('p', {}, 'Brier is the mean squared gap between probability and outcome, so lower is better. Skill above zero means the forecast beat the baseline. Intervals resample consecutive periods, because overlapping forecasts are not independent.'),
+    f('Brier = mean((p − outcome)²)', 'Skill = 1 − Brier_forecast / Brier_baseline'),
+    example));
+  if (latest) {
+    const pick = el('select', { 'aria-label': 'Hotspot' });
+    latest.rows.forEach(r => pick.append(el('option', { value: r.hotspot }, short(r.hotspot))));
+    const out = el('div', {});
+    const draw = () => {
+      const r = latest.rows.find(row => row.hotspot === pick.value);
+      out.replaceChildren(f(
+        `Issued ${latest.issued}, 30 days`,
+        `Recent rate:  λ = ${num(r.recent_rate)}  →  p = ${pct(r.p30_recent)}`,
+        `VIEWS:        E(30) = ${r.e30 === null ? 'n/a' : num(r.e30, 2)} deaths  →  p = ${pct(r.p30_views)}`,
+        `Reference:    ${latest.reference}  →  ${pct(r.p30_baseline)}`,
+        `X signal:     m = ${r.signal_multiplier} from ${drivers(r)}`,
+        `Published:    ${pct(r.p30)}`));
+    };
+    pick.addEventListener('change', draw);
+    example.append(el('h3', {}, 'Worked example from the latest forecast'), el('label', {}, 'Hotspot ', pick), out);
+    draw();
+  } else {
+    example.append(el('h3', {}, 'Illustration, not a forecast'), f(
+      'A hotspot with a major event in 6 of the last 12 months:',
+      'λ = (6 + 0.5) / 12.5 = 0.52', 'p(30) = 1 − exp(−0.52) = 41%',
+      'A signal with m = 2 gives a(30) = 1 + (21/30)(1 − exp(−30/21)) = 1.53', 'p_adjusted(30) = 1 − (1 − 0.41)^1.53 = 55%'));
+  }
+  root.append(el('h2', {}, 'Data sources'));
+  root.append(table(['Source', 'Used for', 'Published here?'], [
+    [link('VIEWS', 'https://viewsforecasting.org'), 'External baseline, by dated production run', 'Aggregated grid map and hotspot totals'],
+    [link('ACLED', 'https://acleddata.com'), 'Outcomes and the recent-rate baseline', 'Aggregated scores only, never event rows'],
+    ['X recent search', 'The signal under test', 'Author counts per hotspot only, never post text or accounts'],
+  ], 9));
+  root.append(el('h2', {}, 'Rules that protect the result'));
+  root.append(el('ul', {}, [
+    'The evaluation rules were committed before the first score, in reports/prereg.md.',
+    'Forecast inputs never use anything dated after the cutoff. Tests fail if they do.',
+    'Only the first run of each week counts, so a run cannot be repeated until it looks good.',
+    'Missing VIEWS cells and unresolved outcomes stay missing and are never counted as zero.',
+    'No conclusion about X before 26 weekly issues across six months.',
+  ].map(t => el('li', {}, t))));
+  root.append(el('h2', {}, 'Known limits'));
+  root.append(el('ul', {}, [
+    'The 20 hotspots were chosen in 2026 knowing where fighting happened, so backtest scores are optimistic.',
+    'ACLED is a revised snapshot. A date lag approximates what was known at the time but cannot reconstruct it.',
+    'X volume reflects attention as much as violence, and partisan accounts on every side post victory claims.',
+    'The VIEWS coefficient is fitted on an older model version and on few months, so it may not transfer.',
+    'These are research estimates, not operational warnings, and should not guide safety decisions.',
+  ].map(t => el('li', {}, t))));
+  root.append(el('p', { class: 'small' }, 'Conflict data: ACLED, acleddata.com. Forecasts: VIEWS, Uppsala University and PRIO, viewsforecasting.org. Neither organisation produced or endorsed this page.'));
+}
+function link(text, href) { return el('a', { href, rel: 'noopener' }, text); }
+
+/* Run health */
+function renderHealth() {
+  const root = document.getElementById('health');
+  if (DATA.status) {
+    root.append(el('h2', {}, 'Last pipeline run'), table(['Stage', 'Status', 'Detail', 'Time'], DATA.status.stages.map(s => [s.stage, s.status, s.detail, when(s.at)]), 9));
+  } else root.append(el('p', {}, 'The pipeline has not run yet.'));
+  root.append(el('h2', {}, 'Forecast runs'));
+  if (DATA.runs.length) {
+    root.append(table(['Issued', 'Extractor', 'Posts', 'Usable share', 'Errors', 'VIEWS run', 'Warnings'], [...DATA.runs].reverse().map(r => {
+      const c = r.health || {};
+      return [r.issued, r.extractor.model || r.extractor.extractor, c.posts_returned ?? 'n/a', c.usable_share ?? 'n/a', c.extraction_errors ?? 'n/a', r.rows[0].views_run || 'n/a', (c.warnings || []).join(' ') || 'None'];
+    }), 9));
+  } else root.append(el('p', {}, 'No forecast runs yet.'));
+  if (DATA.views) root.append(el('h2', {}, 'Data freshness'), el('p', {}, `VIEWS run ${DATA.views.run}, input through ${DATA.views.last_input.slice(0, 7)}, released ${DATA.views.released}.` + (DATA.backtest ? ` ACLED retrieved ${DATA.backtest.panel.acled.retrieved_at.slice(0, 10)}, outcomes resolved through ${DATA.backtest.panel.resolved_through}.` : ' ACLED not loaded.')));
+}
+
+/* Tabs */
+const TABS = [['results', 'Results'], ['mapTab', 'Map'], ['compare', 'Forecast vs VIEWS'], ['how', 'How it works'], ['health', 'Run health']];
+function select(id) {
+  for (const [tab] of TABS) {
+    document.getElementById(tab).classList.toggle('on', tab === id);
+    document.getElementById(`tab-${tab}`).setAttribute('aria-selected', tab === id);
+  }
+  history.replaceState(null, '', `#/${id}`);
+  if (id === 'mapTab') { initMap(); if (map) map.invalidateSize(); }
+  if (id === 'compare') renderCompare();
+}
+const nav = document.getElementById('tabs');
+TABS.forEach(([id, label]) => {
+  const button = el('button', { role: 'tab', id: `tab-${id}`, 'aria-controls': id, 'aria-selected': 'false' }, label);
+  button.addEventListener('click', () => select(id));
+  nav.append(button);
+});
+renderResults();
+renderMapControls();
+renderHow();
+renderHealth();
+const start = location.hash.slice(2);
+select(TABS.some(([id]) => id === start) ? start : 'results');
+</script>
+</body>
+</html>

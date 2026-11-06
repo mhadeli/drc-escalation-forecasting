@@ -1,0 +1,48 @@
+# Builds the dashboard from committed files only: no API calls, secrets or dependencies.
+# One-time setup: Settings -> Pages -> Source: GitHub Actions.
+name: dashboard
+on:
+  push:
+    branches: [main]
+    paths:
+      - history/**
+      - config/**
+      - drc_watch/dashboard*
+      - .github/workflows/pages.yml
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main  # Includes results the pipeline job has just committed.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -c "from drc_watch.dashboard import build; print(build('history', 'site', 'config/hotspots.csv'))"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

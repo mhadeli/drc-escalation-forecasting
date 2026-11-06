@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+data/
+site/
+reports/*
+!reports/prereg.md
+
+# Private planning notes
+docs/
