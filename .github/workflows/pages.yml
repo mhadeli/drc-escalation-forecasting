@@ -1,5 +1,5 @@
 # Builds the dashboard from committed files only: no API calls, secrets or dependencies.
-# One-time setup: Settings -> Pages -> Source: GitHub Actions.
+# Requires Settings -> Pages -> Source: GitHub Actions, set once per repository.
 name: dashboard
 on:
   push:
