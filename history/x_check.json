@@ -1,0 +1,54 @@
+{
+  "week_start": "2026-10-17",
+  "week_end": "2026-10-23",
+  "posts_from": "2026-10-18T20:25:11+00:00",
+  "posts_to": "2026-10-22T19:03:08+00:00",
+  "rows": [
+    {
+      "province": "Nord-Kivu",
+      "event_authors": 21,
+      "authors": 40,
+      "deaths_state": 6,
+      "deaths_organised": 10
+    },
+    {
+      "province": "Sud-Kivu",
+      "event_authors": 48,
+      "authors": 64,
+      "deaths_state": 24,
+      "deaths_organised": 31
+    },
+    {
+      "province": "Ituri",
+      "event_authors": 10,
+      "authors": 15,
+      "deaths_state": 3,
+      "deaths_organised": 7
+    },
+    {
+      "province": "Tanganyika",
+      "event_authors": 1,
+      "authors": 1,
+      "deaths_state": 0,
+      "deaths_organised": 0
+    },
+    {
+      "province": "Mai-Ndombe",
+      "event_authors": 0,
+      "authors": 0,
+      "deaths_state": 0,
+      "deaths_organised": 1
+    },
+    {
+      "province": "Kinshasa",
+      "event_authors": 15,
+      "authors": 52,
+      "deaths_state": 0,
+      "deaths_organised": 0
+    }
+  ],
+  "rank_event_authors_vs_state_deaths": 0.819688599970537,
+  "rank_event_authors_vs_organised_deaths": 0.6667366910003157,
+  "rank_all_authors_vs_state_deaths": 0.6375355777548621,
+  "provinces_n": 6
+}

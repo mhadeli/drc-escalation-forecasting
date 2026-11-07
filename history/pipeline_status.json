@@ -1,41 +1,35 @@
 {
-  "finished_at": "2026-11-06T22:52:29+00:00",
+  "finished_at": "2026-11-07T20:08:11+00:00",
   "stages": [
     {
-      "stage": "VIEWS",
+      "stage": "Inputs",
       "status": "done",
-      "detail": "61 dated runs cached.",
-      "at": "2026-11-06T22:52:29+00:00"
-    },
-    {
-      "stage": "ACLED",
-      "status": "skipped",
-      "detail": "No ACLED credentials or export yet, so nothing that needs ACLED can run.",
-      "at": "2026-11-06T22:52:29+00:00"
+      "detail": "ACLED through 2026-10-30 (complete through 2026-09), VIEWS and X aggregates present.",
+      "at": "2026-11-07T20:08:07+00:00"
     },
     {
       "stage": "Backtest",
-      "status": "skipped",
-      "detail": "Needs ACLED.",
-      "at": "2026-11-06T22:52:29+00:00"
+      "status": "done",
+      "detail": "31 monthly issues. At 30 days VIEWS's error is 39% higher than the baseline's.",
+      "at": "2026-11-07T20:08:11+00:00"
+    },
+    {
+      "stage": "X check",
+      "status": "done",
+      "detail": "6 provinces, week of 2026-10-17; rank correlation 0.82.",
+      "at": "2026-11-07T20:08:11+00:00"
     },
     {
       "stage": "Forecast",
-      "status": "skipped",
-      "detail": "The X pull is off, because it costs credits.",
-      "at": "2026-11-06T22:52:29+00:00"
+      "status": "done",
+      "detail": "Frozen since 2026-11-07, issued 2026-11-01.",
+      "at": "2026-11-07T20:08:11+00:00"
     },
     {
       "stage": "Score",
       "status": "skipped",
-      "detail": "Needs ACLED and the backtest.",
-      "at": "2026-11-06T22:52:29+00:00"
-    },
-    {
-      "stage": "Publish",
-      "status": "done",
-      "detail": "Updated: views_map.json.",
-      "at": "2026-11-06T22:52:29+00:00"
+      "detail": "Nothing has resolved yet; 30 days resolves about 2026-12-14.",
+      "at": "2026-11-07T20:08:11+00:00"
     }
   ]
 }

@@ -1,0 +1,17 @@
+{
+  "acled_complete_through": "2026-09",
+  "horizons": {
+    "30": {
+      "status": "pending",
+      "resolves": "2026-12-14"
+    },
+    "60": {
+      "status": "pending",
+      "resolves": "2027-01-14"
+    },
+    "90": {
+      "status": "pending",
+      "resolves": "2027-02-14"
+    }
+  }
+}

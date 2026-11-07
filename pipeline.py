@@ -1,43 +1,42 @@
-"""DRC escalation watch: do X posts add forecasting skill over a baseline that already exists?
+"""DRC fatalities forecasting: 30, 60 and 90 days per province, from ACLED history and X posts, compared with VIEWS.
 
-  python pipeline.py fetch --acled export.csv --coverage-start 2018-01-01 --coverage-end 2026-10-31
-  (review config/hotspots.csv and set reviewed=1 for every hotspot)
-  python pipeline.py build
-  python pipeline.py backtest
-  python pipeline.py run --fetch --extractor gemini-3.8-flash    # or: run --posts saved.jsonl
-  python pipeline.py score
-  python pipeline.py publish && python pipeline.py dashboard
-  python pipeline.py orchestrate --pull-x                        # every stage in order, as CI runs it
+  python pipeline.py ingest --acled raw_data/acled_weekly.csv --posts data/raw/drc_posts.jsonl   # local: raw data
+  python pipeline.py backtest     # ACLED-history baseline against VIEWS, 2023 onward
+  python pipeline.py xcheck       # X authors per province against ACLED deaths in the same week
+  python pipeline.py forecast     # the one live forecast, frozen once written
+  python pipeline.py score        # scores the live forecast once ACLED has coded its months
+  python pipeline.py orchestrate  # every stage after ingest, as GitHub Actions runs it
+  python pipeline.py dashboard
 
-Raw posts, extractions and briefs stay in data/ (gitignored). Only post-free files reach history/.
+Ingest is the only step that reads raw data. It writes post-free aggregates to history/inputs/, so every later
+stage, locally or on GitHub Actions, runs from committed files.
 """
 
 import argparse
 import hashlib
 import json
-import math
 import os
-import re
-import shutil
 import sys
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-import numpy as np
 import requests
 
-from drc_watch import acled, backtest, dashboard, views
+from drc_watch import acled, backtest, dashboard, provinces, views
 from drc_watch import fetch_recent as x
 from drc_watch import forecast as fc
 
-RUNS = x.DATA / 'runs'
 HISTORY = x.HISTORY
-PUBLISHED = ('manifest.json', 'forecast.json', 'health.json')
-CODE = ('drc_watch/fetch_recent.py', 'drc_watch/forecast.py', 'drc_watch/extract_llm.py', 'drc_watch/acled.py',
-        'drc_watch/views.py', 'drc_watch/backtest.py', 'pipeline.py')
-PLACE_CUES = (r"(?:village|localite|groupement|chefferie|territoire|cite|secteur|axe|near|village of|town of|localities? of)"
-              r" (?:de |d'|du |of )?([a-z][a-z\-]{3,})")
+INPUTS = HISTORY / 'inputs'
+BOUNDARIES = x.DATA / 'boundaries' / 'COD_ADM1_simplified.geojson'
+BOUNDARIES_URL = ('https://github.com/wmgeolab/geoBoundaries/raw/9469f09/releaseData/gbOpen/COD/ADM1/'
+                  'geoBoundaries-COD-ADM1_simplified.geojson')
+ISSUE = '2026-11'  # The live forecast is issued on 2026-11-01.
+FIRST_ISSUE = '2023-01'
+EVALUATION_START = '2024-01'  # 2023 chooses the baseline window, so it is not scored.
+CODE = ('drc_watch/acled.py', 'drc_watch/views.py', 'drc_watch/provinces.py', 'drc_watch/forecast.py',
+        'drc_watch/backtest.py', 'pipeline.py')
 
 
 def code_hash():
@@ -47,304 +46,303 @@ def code_hash():
     return digest.hexdigest()[:12]
 
 
-def fetch(args):
-    if not args.acled and args.no_views:
-        raise ValueError('Nothing to fetch.')
-    if args.acled:
-        if not (args.coverage_start and args.coverage_end):
-            raise ValueError('--acled needs --coverage-start and --coverage-end, the dates the export was filtered to.')
-        meta = acled.import_file(args.acled, args.coverage_start, args.coverage_end)
-        print(f"ACLED: {meta['events']} events. Review config/hotspots.csv and set reviewed=1 before build.")
-    if not args.no_views:
-        views.fetch_all(args.pause)
-
-
-def preflight(issue):
-    """Everything a live forecast needs, checked before any paid API call."""
-    path = HISTORY / 'reference.json'
+def read(name):
+    path = INPUTS / name if not str(name).startswith('/') else Path(name)
     if not path.exists():
-        raise ValueError('No frozen reference from the backtest. Run build and backtest first.')
-    reference = json.loads(path.read_text())
-    if reference['hotspots_sha256'] != acled.boxes_hash():
-        raise ValueError('config/hotspots.csv changed after the reference baseline was frozen.')
-    events, meta = acled.load_snapshot()
-    cutoff = issue - timedelta(days=14)
-    if date.fromisoformat(meta['coverage_end']) < cutoff or date.fromisoformat(meta['coverage_start']) > acled.month_shift(cutoff, -12):
-        raise ValueError(f"ACLED covers {meta['coverage_start']} to {meta['coverage_end']}; "
-                         f'issue {issue} needs {acled.month_shift(cutoff, -12)} to {cutoff}. Import a newer export.')
-    boxes = acled.load_boxes()
-    return reference, meta, boxes, acled.major_dates(events, boxes), acled.note_history(events, boxes)
+        raise ValueError(f'{path.name} is missing. Run pipeline.py ingest first.')
+    return json.loads(path.read_text())
 
 
-def post_time(post):
-    return datetime.fromisoformat(post['created_at'].replace('Z', '+00:00'))
-
-
-def snapshot_from_file(path):
-    """A saved posts file: the forecast is issued at its last post, so nothing later can leak in."""
-    posts = x.read_jsonl(path)
-    if not posts:
-        raise ValueError(f'No posts in {path}')
-    last = max(post_time(p) for p in posts)
-    return posts, {'posts_file': str(path), 'sha256': x.checksum(path), 'retrieved_at': last.isoformat(),
-                   'requested': len(posts), 'returned': len(posts), 'query': None,
-                   'posts_per_day': dict(sorted(Counter(p['created_at'][:10] for p in posts).items())),
-                   'languages': dict(Counter(p.get('lang', 'und') for p in posts))}
-
-
-def extract(posts, extractor):
-    if extractor == 'rules':
-        return [fc.classify(post) for post in posts], {'extractor': 'rules'}
-    from drc_watch import extract_llm
-    tagged, stats = extract_llm.tag_posts(posts, extractor)
-    return tagged, {'extractor': 'llm', **stats}
+def issue_date(key):
+    return date.fromisoformat(f'{key}-01')
 
 
 def usable(row):
     return row['on_topic'] and not row['historical'] and not row.get('extraction_error')
 
 
-def health(summary, tagged, rows):
-    known = {alias for _, aliases in fc.HOTSPOTS.values() for alias in aliases}
-    gaps = Counter()
-    for row in filter(usable, tagged):
-        found = re.findall(PLACE_CUES, fc.normalize(row['text'])) + [fc.normalize(p) for p in row.get('other_places') or []]
-        gaps.update(place for place in found if place not in known)
-    share = sum(map(usable, tagged)) / max(len(tagged), 1)
-    errors = sum(1 for row in tagged if row.get('extraction_error'))
-    warnings = []
-    if summary.get('stopped_early'):
-        warnings.append(f"X pull stopped early: {summary['stopped_early']}")
-    if summary['returned'] < .8 * summary['requested']:
-        warnings.append(f"Only {summary['returned']} of {summary['requested']} posts returned.")
-    if share < .5:
-        warnings.append(f'Usable share {share:.0%} is below 50%.')
-    if errors > .02 * len(tagged):
-        warnings.append(f'{errors} extraction errors.')
-    if any(row['p30_views'] is None for row in rows):
-        warnings.append('No VIEWS forecast for: ' + ', '.join(r['hotspot'] for r in rows if r['p30_views'] is None))
-    return {'posts_returned': summary['returned'], 'usable_share': round(share, 3), 'languages': summary['languages'],
-            'posts_per_day': summary['posts_per_day'], 'extraction_errors': errors,
-            'gazetteer_gaps': gaps.most_common(10), 'warnings': warnings}
+# 1. Ingest ---------------------------------------------------------------------------------------------------
+
+def ingest_acled(path):
+    rows = acled.read_weekly(path)
+    cover = acled.coverage(rows)
+    weekly = {d: acled.weekly_totals(rows, d) for d in acled.DEFINITIONS}
+    monthly = {d: acled.to_monthly(weekly[d], cover) for d in acled.DEFINITIONS}
+    last = date.fromisoformat(cover['last_week'])
+    recent = [last - timedelta(weeks=i) for i in range(12, -1, -1)]
+    x.write_json(INPUTS / 'acled.json', {
+        'source': 'ACLED weekly aggregated data, Democratic Republic of Congo', 'file_sha256': x.checksum(path),
+        'rows': len(rows), **cover, 'definitions': {d: list(t) for d, t in acled.DEFINITIONS.items()}, 'primary': acled.PRIMARY,
+        'monthly': monthly,
+        'weekly': {d: {w.isoformat(): acled.week_totals(weekly[d], w) for w in recent} for d in acled.DEFINITIONS}})
+    return cover
 
 
-def brief(saved, checks, tagged):
-    lines = [f"# DRC escalation watch, issued {saved['issued']}", '',
-             f"Target: {fc.TARGET}. Baseline: ACLED history. The X adjustment is an untested hypothesis, "
-             'so compare each number with its baseline.', '',
-             '| Hotspot | 30 days | Baseline | 60 days | 90 days | Signal: events, control, escalation, de-escalation |',
-             '|---|---:|---:|---:|---:|---|']
-    for r in saved['rows'][:8]:
-        lines.append(f"| {r['hotspot']} | {r['p30']:.0%} | {r['p30_baseline']:.0%} | {r['p60']:.0%} | {r['p90']:.0%} | "
-                     f"{r['event']}, {r['control_change']}, {r['escalation']}, {r['deescalation']} |")
-    lines += ['', '## Evidence for the largest changes', '']
-    for r in sorted(saved['rows'], key=lambda r: r['p30'] - r['p30_baseline'], reverse=True)[:3]:
-        posts = [p for p in tagged if usable(p) and r['hotspot'] in p['hotspots'] and p['event']]
-        lines.append(f"**{r['hotspot']}**")
-        lines += [f"- {p['created_at'][:10]}: {' '.join(p['text'].split())[:240]}" for p in posts[:2]] or ['- No event posts.']
-        lines.append('')
-    lines += ['## Caveats', ''] + [f'- {w}' for w in checks['warnings'] or ['No health warnings this run.']]
-    lines.append('- X volume reflects attention as much as violence, and partisan accounts on every side post victory claims.')
-    return '\n'.join(lines) + '\n'
+def ingest_views(cover, fetch=True):
+    """Province totals for each issue's three months, from the run that was public on that day."""
+    if fetch:
+        views.fetch_catalog()
+    runs = views.catalog()
+    issues = backtest.issues_between(FIRST_ISSUE, acled.shift(cover['complete_through'], -2)) + [ISSUE]
+    if not BOUNDARIES.exists():
+        BOUNDARIES.parent.mkdir(parents=True, exist_ok=True)
+        response = requests.get(BOUNDARIES_URL, timeout=120)
+        response.raise_for_status()
+        BOUNDARIES.write_bytes(response.content)
+    shapes = provinces.load_shapes(BOUNDARIES)
+    chosen = {issue: views.select_run(runs, issue_date(issue)) for issue in issues}
+    missing = [i for i, run in chosen.items() if run is None]
+    if missing:
+        raise ValueError(f'No VIEWS run was public for issues {missing}.')
+    for run in {r['run'] for r in chosen.values()}:
+        views.fetch_run(run) if fetch else views.read_run(run)
+    cells = {gid for gid, _, _ in views.read_run(chosen[ISSUE]['run'])}
+    cell_province, border = provinces.assign_cells(cells, shapes, views.cell_center)
+    out = {}
+    for issue, run in chosen.items():
+        months = [acled.shift(issue, i) for i in range(3)]
+        out[issue] = {**run, 'provinces': views.province_totals(run['run'], cell_province, months)}
+    per_province = Counter(cell_province.values())
+    x.write_json(INPUTS / 'views.json', {
+        'source': 'VIEWS fatalities, state-based, PRIO-GRID month, api.viewsforecasting.org',
+        'boundaries': 'geoBoundaries gbOpen COD ADM1 (OpenStreetMap, ODbL 1.0)', 'cells': len(cell_province),
+        'border_cells': len(border), 'cells_per_province': dict(sorted(per_province.items())), 'issues': out})
+    x.write_json(INPUTS / 'provinces.geojson', provinces.map_geojson(shapes))
+    return len(chosen), len(cell_province), len(border)
 
 
-def run(fetch_posts=False, posts_file=None, extractor='rules', target=1000):
-    if fetch_posts and posts_file:
-        raise ValueError('Use --fetch or --posts, not both.')
-    if posts_file:
-        posts, summary = snapshot_from_file(posts_file)
-    elif fetch_posts:
-        posts, summary = None, None
-    else:
-        summary = x.latest_summary()
-        posts = x.read_jsonl(summary['posts_file'])
-    issue = x.now().date() if fetch_posts else date.fromisoformat(summary['retrieved_at'][:10])
-    reference, meta, boxes, dates, notes = preflight(issue)
-    baselines = backtest.live_baselines(issue, dates, boxes, reference, notes)  # Fails here, before X credits are spent.
-    if fetch_posts:
-        token = x.load_env().get('X_BEARER_TOKEN')
-        if not token:
-            raise ValueError('Set X_BEARER_TOKEN in .env.')
-        posts, details = x.collect(token, target)
-        summary = x.save_snapshot(posts, target, details)
-    issued_at = datetime.fromisoformat(summary['retrieved_at'])
-    tagged, stats = extract(posts, extractor)
-    signals = fc.hotspot_signals(tagged, issued_at)
-    rows = []
-    for name, base in baselines.items():
-        multiplier = fc.signal_multiplier(signals[name])
-        adjusted = fc.adjust({h: base[f'p{h}_baseline'] for h in fc.HORIZONS}, multiplier)
-        rows.append({**base, **signals[name], 'signal_multiplier': round(multiplier, 3), **{f'p{h}': adjusted[h] for h in fc.HORIZONS}})
-    rows.sort(key=lambda r: r['p30'], reverse=True)
-    run_id = x.now().strftime('%Y%m%dT%H%M%S%fZ')
-    out = RUNS / run_id
-    saved = {'run_id': run_id, 'issued': issue.isoformat(), 'target': fc.TARGET, 'reference': reference['baseline'],
-             'hotspots_sha256': reference['hotspots_sha256'], 'extractor': stats,
-             'resolve_by': {f'p{h}': (issue + timedelta(days=h)).isoformat() for h in fc.HORIZONS}, 'rows': rows}
-    checks = health(summary, tagged, rows)
-    x.write_jsonl(out / 'tagged.jsonl', tagged)
-    x.write_json(out / 'forecast.json', saved)
-    x.write_json(out / 'health.json', checks)
-    x.write_json(out / 'manifest.json', {
-        'run_id': run_id, 'issued': issue.isoformat(), 'code_hash': code_hash(), 'extractor': stats, 'reference': reference,
-        'inputs': {'posts_file': Path(summary['posts_file']).name, 'posts_sha256': summary['sha256'], 'query': summary['query'],
-                   'acled_sha256': meta['sha256'], 'acled_retrieved_at': meta['retrieved_at']},
-        'counts': {'posts': len(posts), 'usable': sum(map(usable, tagged))}, 'warnings': checks['warnings']})
-    (out / 'brief.md').write_text(brief(saved, checks, tagged))
-    for name in PUBLISHED:  # tagged.jsonl and brief.md contain post text and stay local.
-        (HISTORY / 'runs' / run_id).mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(out / name, HISTORY / 'runs' / run_id / name)
-    return out
+def ingest_posts(path):
+    posts = x.read_jsonl(path)
+    if not posts:
+        raise ValueError(f'No posts in {path}')
+    times = sorted(datetime.fromisoformat(p['created_at'].replace('Z', '+00:00')) for p in posts)
+    tagged = [fc.classify(p) for p in posts]
+    signals = fc.province_signals(tagged, times[-1])
+    x.write_json(INPUTS / 'x_counts.json', {
+        'source': 'X recent search, saved pull', 'posts_sha256': x.checksum(path), 'extractor': 'rules',
+        'first_post': times[0].isoformat(), 'last_post': times[-1].isoformat(), 'posts': len(posts),
+        'usable_posts': sum(map(usable, tagged)), 'authors': len({p.get('author_id') for p in posts}),
+        'posts_per_day': dict(sorted(Counter(p['created_at'][:10] for p in posts).items())),
+        'languages': dict(Counter(p.get('lang', 'und') for p in posts).most_common()),
+        'provinces': signals})
+    return signals
 
 
-def skill_interval(cases, horizon, draws=1000):
-    """Forecasts overlap, so resample runs of consecutive issues about one horizon long."""
-    issues = sorted({c['issue'] for c in cases})
-    by_issue = {issue: [c for c in cases if c['issue'] == issue] for issue in issues}
-    block, rng, values = max(1, math.ceil(horizon / 7)), np.random.default_rng(7), []
-    if len(issues) < 2 * block:  # Every resample would hold the same issues, a zero-width interval that only looks certain.
-        return None
-    for _ in range(draws):
-        picked = []
-        while len(picked) < len(issues):
-            start = int(rng.integers(len(issues)))
-            picked.extend(issues[(start + i) % len(issues)] for i in range(block))
-        sample = [c for issue in picked[:len(issues)] for c in by_issue[issue]]
-        model = np.mean([(c['p'] - c['outcome']) ** 2 for c in sample])
-        base = np.mean([(c['baseline'] - c['outcome']) ** 2 for c in sample])
-        if base > 0:
-            values.append(1 - model / base)
-    return np.quantile(values, [.05, .95]).tolist() if values else None
+def ingest(args):
+    cover = ingest_acled(args.acled)
+    print(f"ACLED: {cover['first_week']} to {cover['coverage_end']}, complete through {cover['complete_through']}.")
+    issues, cells, border = ingest_views(cover, fetch=not args.offline)
+    print(f'VIEWS: {issues} issues, {cells} cells mapped to provinces, {border} border cells assigned to the nearest.')
+    if args.posts:
+        signals = ingest_posts(args.posts)
+        print('X event authors:', {k: v['event'] for k, v in signals.items()})
+    stamp('Ingest', 'done', f"ACLED through {cover['coverage_end']}; {issues} VIEWS issues; X {'loaded' if args.posts else 'unchanged'}.")
 
 
-def score(draws=1000):
-    """Score resolved horizons only. One run per ISO week counts, the first, so reruns cannot be picked."""
-    events, meta = acled.load_snapshot()
-    boxes = acled.load_boxes()
-    dates, resolved = acled.major_dates(events, boxes), backtest.resolved_through(meta)
-    boxes_hash, counted, cases = acled.boxes_hash(), set(), {h: [] for h in fc.HORIZONS}
-    for path in sorted((HISTORY / 'runs').glob('*/forecast.json')):
+def stamp(stage, status, detail):
+    """Ingest runs locally, so it leaves its own status for the dashboard."""
+    path = HISTORY / 'ingest_status.json'
+    x.write_json(path, {'stage': stage, 'status': status, 'detail': detail, 'at': x.now().isoformat(timespec='seconds')})
+
+
+# 2. Backtest ---------------------------------------------------------------------------------------------------
+
+def run_backtest(draws=backtest.DRAWS):
+    data, views_in = read('acled.json'), read('views.json')
+    monthly = data['monthly'][data['primary']]
+    last_issue = acled.shift(data['complete_through'], -2)
+    issues = backtest.issues_between(FIRST_ISSUE, last_issue)
+    views_by_issue = {i: v['provinces'] for i, v in views_in['issues'].items()}
+    rows = backtest.panel(monthly, views_by_issue, issues)
+    window, errors = backtest.choose_window(rows)
+    reference = freeze_reference(window, errors, backtest.views_scale(rows), data)
+    key = f"base_{reference['window']}"
+    backtest.add_scaled(rows, reference['views_scale'])
+    evaluation = [r for r in rows if r['issue'] >= EVALUATION_START]
+    no_gap = backtest.add_scaled(backtest.panel(monthly, views_by_issue, [i for i in issues if i >= EVALUATION_START], gap=0),
+                                 reference['views_scale'])
+    result = {
+        'definition': data['primary'], 'window': reference['window'], 'gap_months': backtest.GAP,
+        'views_scale': reference['views_scale'],
+        'selection': {'period': list(backtest.SELECTION), 'errors': {str(w): e for w, e in errors.items()}},
+        'evaluation': {'first_issue': EVALUATION_START, 'last_issue': last_issue, 'scores': backtest.scores(evaluation, key, draws)},
+        'selection_year_scores': backtest.scores([r for r in rows if r['issue'] < EVALUATION_START], key, draws),
+        'sensitivity_no_gap': backtest.scores(no_gap, key, draws),
+        'national': backtest.national_series(rows, key),
+        'provinces': backtest.by_province(evaluation, key),
+        'province_series': backtest.province_series(rows, key),
+        'views_runs': {i: v['run'] for i, v in views_in['issues'].items() if i in issues},
+        'acled_complete_through': data['complete_through'], 'acled_sha256': data['file_sha256'], 'code_hash': code_hash()}
+    x.write_json(HISTORY / 'backtest.json', result)
+    return result
+
+
+def freeze_reference(window, errors, scale, data):
+    """The baseline window and the VIEWS scale are chosen once, on 2023, and kept. A run that would differ fails."""
+    path = HISTORY / 'reference.json'
+    if path.exists():
         saved = json.loads(path.read_text())
-        issue = date.fromisoformat(saved['issued'])
-        if saved['hotspots_sha256'] != boxes_hash:
-            print(f"Skipped {saved['run_id']}: hotspot boxes changed after it was issued.")
+        if saved['window'] != window or abs(saved['views_scale'] - scale) > 1e-9:
+            raise ValueError(f"2023 now picks window {window} and scale {scale:.4f}, not the frozen {saved['window']} and "
+                             f"{saved['views_scale']:.4f}; the inputs changed. Investigate before deleting history/reference.json.")
+        return saved
+    saved = {'window': window, 'views_scale': scale, 'gap_months': backtest.GAP, 'definition': data['primary'],
+             'chosen_on': list(backtest.SELECTION),
+             'errors': {str(w): e for w, e in errors.items()}, 'frozen_at': x.now().isoformat(timespec='seconds'),
+             'acled_sha256': data['file_sha256']}
+    x.write_json(path, saved)
+    return saved
+
+
+# 3. X check ------------------------------------------------------------------------------------------------------
+
+def run_xcheck():
+    data, counts = read('acled.json'), read('x_counts.json')
+    first = date.fromisoformat(counts['first_post'][:10])
+    last = date.fromisoformat(counts['last_post'][:10])
+    week = first - timedelta(days=(first.weekday() - 5) % 7)  # The ACLED week, starting Saturday, holding the first post.
+    if last > week + timedelta(days=6):
+        raise ValueError(f'The X posts span {first} to {last}, more than the ACLED week starting {week}.')
+    deaths = {d: data['weekly'][d].get(week.isoformat()) for d in data['definitions']}
+    if deaths[data['primary']] is None:
+        raise ValueError(f'ACLED has no weekly totals for the week starting {week}.')
+    rows = [{'province': name, 'event_authors': spot['event'], 'authors': spot['authors'],
+             **{f'deaths_{d}': deaths[d][name] for d in deaths}} for name, spot in counts['provinces'].items()]
+    result = {'week_start': week.isoformat(), 'week_end': (week + timedelta(days=6)).isoformat(),
+              'posts_from': counts['first_post'], 'posts_to': counts['last_post'], 'rows': rows,
+              'rank_event_authors_vs_state_deaths': backtest.spearman([r['event_authors'] for r in rows], [r['deaths_state'] for r in rows]),
+              'rank_event_authors_vs_organised_deaths': backtest.spearman([r['event_authors'] for r in rows], [r['deaths_organised'] for r in rows]),
+              'rank_all_authors_vs_state_deaths': backtest.spearman([r['authors'] for r in rows], [r['deaths_state'] for r in rows]),
+              'provinces_n': len(rows)}
+    x.write_json(HISTORY / 'x_check.json', result)
+    return result
+
+
+# 4. Live forecast ------------------------------------------------------------------------------------------------
+
+def run_forecast(force=False):
+    path = HISTORY / 'forecast.json'
+    if path.exists() and not force:
+        return json.loads(path.read_text()), False
+    data, views_in, counts = read('acled.json'), read('views.json'), read('x_counts.json')
+    reference = read(HISTORY / 'reference.json')
+    issue = issue_date(ISSUE)
+    if datetime.fromisoformat(counts['last_post']) >= datetime(issue.year, issue.month, 1, tzinfo=timezone.utc):
+        raise ValueError('A post is dated on or after the issue date.')
+    monthly = data['monthly'][data['primary']]
+    run = views_in['issues'][ISSUE]
+    rates = {}
+    for name, series in monthly.items():
+        rate = backtest.baseline_rate(series, ISSUE, reference['window'])
+        if rate is None:
+            raise ValueError(f'ACLED does not cover the baseline window for {name}; it needs months through {acled.shift(ISSUE, -2)}.')
+        rates[name] = rate
+    events = {name: counts['provinces'][name]['event'] for name in fc.X_PROVINCES}
+    multipliers = fc.x_multipliers(events, {name: rates[name] for name in fc.X_PROVINCES})
+    rows = []
+    for name in sorted(monthly):
+        row = {'province': name, 'baseline_rate': round(rates[name], 2), 'x_multiplier': None, 'x_event_authors': events.get(name)}
+        if name in multipliers:
+            row['x_multiplier'] = round(multipliers[name], 3)
+        for days, months in fc.HORIZONS.items():
+            base = rates[name] * months
+            row[f'baseline_{days}'] = round(base, 1)
+            row[f'x_{days}'] = round(base * fc.decayed(multipliers[name], days), 1) if name in multipliers else None
+            v = backtest.views_total(run['provinces'].get(name), ISSUE, months)
+            row[f'views_{days}'] = None if v is None else round(v, 1)
+            row[f'views_scaled_{days}'] = None if v is None else round(v * reference['views_scale'], 1)
+        rows.append(row)
+    saved = {'issued': issue.isoformat(), 'definition': data['primary'], 'window_months': reference['window'],
+             'views_scale': reference['views_scale'],
+             'acled_through': acled.shift(ISSUE, -2), 'x_posts': [counts['first_post'], counts['last_post']],
+             'views_run': {k: run[k] for k in ('run', 'released', 'last_input')},
+             'months': {str(d): [acled.shift(ISSUE, i) for i in range(m)] for d, m in fc.HORIZONS.items()},
+             'resolves': {str(d): (acled.month_end(acled.shift(ISSUE, m - 1)) + timedelta(days=acled.REPORTING_LAG_DAYS)).isoformat()
+                          for d, m in fc.HORIZONS.items()},
+             'written_at': x.now().isoformat(timespec='seconds'), 'code_hash': code_hash(), 'rows': rows}
+    x.write_json(path, saved)
+    return saved, True
+
+
+# 5. Score ------------------------------------------------------------------------------------------------------
+
+def run_score():
+    saved, data = read(HISTORY / 'forecast.json'), read('acled.json')
+    monthly = data['monthly'][saved['definition']]
+    result = {'acled_complete_through': data['complete_through'], 'horizons': {}}
+    for days, months in fc.HORIZONS.items():
+        needed = saved['months'][str(days)]
+        if needed[-1] > data['complete_through']:
+            result['horizons'][str(days)] = {'status': 'pending', 'resolves': saved['resolves'][str(days)]}
             continue
-        week = issue.isocalendar()[:2]
-        first = week not in counted
-        counted.add(week)
-        scores = {}
-        for h in fc.HORIZONS:
-            resolved_rows = [(row, acled.target(dates[row['hotspot']], issue, h, resolved)) for row in saved['rows']]
-            resolved_rows = [(row, outcome) for row, outcome in resolved_rows if outcome is not None]
-            if not resolved_rows:
-                continue
-            brier = lambda key: float(np.mean([(row[key] - y) ** 2 for row, y in resolved_rows]))
-            scores[f'p{h}'] = {'n': len(resolved_rows), 'positives': sum(y for _, y in resolved_rows),
-                               'brier_model': brier(f'p{h}'), 'brier_baseline': brier(f'p{h}_baseline'), 'brier_notes': brier(f'p{h}_notes')}
-            if first:
-                cases[h] += [{'issue': saved['issued'], 'p': row[f'p{h}'], 'baseline': row[f'p{h}_baseline'], 'notes': row[f'p{h}_notes'],
-                              'views': row[f'p{h}_views'], 'outcome': y} for row, y in resolved_rows]
-        x.write_json(path.parent / 'scores.json', {'run_id': saved['run_id'], 'resolved_through': resolved.isoformat(),
-                     'acled_sha256': meta['sha256'], 'acled_retrieved_at': meta['retrieved_at'], 'scores': scores})
-    summary = {'resolved_through': resolved.isoformat(), 'acled_sha256': meta['sha256'], 'horizons': {}}
-    for h, rows in cases.items():
-        if not rows:
-            continue
-        issues = sorted({c['issue'] for c in rows})
-        model = float(np.mean([(c['p'] - c['outcome']) ** 2 for c in rows]))
-        base = float(np.mean([(c['baseline'] - c['outcome']) ** 2 for c in rows]))
-        notes = float(np.mean([(c['notes'] - c['outcome']) ** 2 for c in rows]))
-        paired = [c for c in rows if c['views'] is not None]
-        paired_base = float(np.mean([(c['baseline'] - c['outcome']) ** 2 for c in paired])) if paired else None
-        views_brier = float(np.mean([(c['views'] - c['outcome']) ** 2 for c in paired])) if paired else None
-        spans_six = acled.month_shift(date.fromisoformat(issues[0]), 6) <= date.fromisoformat(issues[-1])
-        summary['horizons'][str(h)] = {'issues': len(issues), 'forecasts': len(rows), 'brier_model': model, 'brier_baseline': base,
-                                       'skill': 1 - model / base if base > 0 else None, 'skill_90': skill_interval(rows, h, draws),
-                                       'brier_notes': notes, 'skill_notes': 1 - notes / base if base > 0 else None, 'brier_views': views_brier,
-                                       'skill_views': 1 - views_brier / paired_base if paired_base else None,
-                                       'conclusive': len(issues) >= 26 and spans_six}
-    x.write_json(HISTORY / 'live_scores.json', summary)
-    return summary
+        cases = [(r, sum(monthly[r['province']][m] for m in needed)) for r in saved['rows']]
+        err = lambda key, subset: sum(backtest.log_error(r[f'{key}_{days}'], a) for r, a in subset) / len(subset)
+        with_x = [(r, a) for r, a in cases if r[f'x_{days}'] is not None]
+        result['horizons'][str(days)] = {
+            'status': 'scored', 'provinces': len(cases), 'error_baseline': err('baseline', cases), 'error_views': err('views', cases),
+            'error_views_scaled': err('views_scaled', cases),
+            'x_provinces': len(with_x), 'error_x': err('x', with_x), 'error_baseline_x_provinces': err('baseline', with_x),
+            'actual': {r['province']: round(a, 1) for r, a in cases}}
+    x.write_json(HISTORY / 'live_scores.json', result)
+    return result
 
 
-def publish():
-    """Copy the latest backtest scores and plots and refresh the VIEWS map. Live runs publish themselves."""
-    published = []
-    reports = sorted(backtest.REPORTS.glob('backtest_*/scores.json'))
-    if reports:
-        target = HISTORY / 'backtest'
-        target.mkdir(parents=True, exist_ok=True)
-        for name in ('scores.json', 'hotspots.json', 'reliability_recent.png', 'reliability_text.png', 'reliability_views.png'):
-            shutil.copyfile(reports[-1].parent / name, target / name)
-        published.append(target)
-    if (views.OUT / 'catalog.json').exists():
-        x.write_json(HISTORY / 'views_map.json', views.latest_map(x.now().date()))
-        published.append(HISTORY / 'views_map.json')
-    return published
-
+# Orchestration ---------------------------------------------------------------------------------------------------
 
 class Skip(Exception):
     """A stage that cannot or need not run; not a failure."""
 
 
-def orchestrate(pull_x=False, extractor='rules', rebuild=False, pause=3, since='2018-01-01'):
-    """Run every stage in order and record each outcome for the dashboard. Failures do not hide later stages."""
-    snapshot, reference = x.DATA / 'acled' / 'snapshot.json', HISTORY / 'reference.json'
-
-    def stage_views():
-        views.fetch_all(pause)
-        return f"{len(views.catalog())} dated runs cached."
-
-    def stage_acled():
-        today = x.now().date()
-        path = x.DATA / 'acled' / 'download.csv'
-        if not acled.download(path, since, today.isoformat()):
-            if snapshot.exists():
-                raise Skip('No ACLED credentials here; using the local snapshot.')
-            raise Skip('No ACLED credentials or export yet, so nothing that needs ACLED can run.')
-        meta = acled.import_file(path, since, today.isoformat())
-        path.unlink()
-        return f"{meta['events']} events through {meta['coverage_end']}."
+def orchestrate(draws=backtest.DRAWS):
+    def stage_inputs():
+        names = ('acled.json', 'views.json', 'x_counts.json', 'provinces.geojson')
+        missing = [n for n in names if not (INPUTS / n).exists()]
+        if missing:
+            raise Skip(f"Missing {', '.join(missing)}. Run pipeline.py ingest locally and push history/inputs.")
+        data = read('acled.json')
+        return f"ACLED through {data['coverage_end']} (complete through {data['complete_through']}), VIEWS and X aggregates present."
 
     def stage_backtest():
-        if not snapshot.exists():
-            raise Skip('Needs ACLED.')
-        if reference.exists() and not rebuild:
-            raise Skip('The backtest report exists and the mapping is frozen; pass --rebuild to report on a newer snapshot.')
-        try:
-            acled.load_boxes()
-        except ValueError as error:
-            raise Skip(str(error))
-        backtest.build()
-        return f'Report: {backtest.report().parent.name}.'
+        if not (INPUTS / 'views.json').exists():
+            raise Skip('Needs the ingested inputs.')
+        s = run_backtest(draws)['evaluation']['scores']['30']
+        if s['skill_views'] is None:
+            return f"{s['issues']} monthly issues. The baseline made no errors, so VIEWS's relative error is undefined."
+        change = -s['skill_views']
+        return (f"{s['issues']} monthly issues. At 30 days VIEWS's error is {abs(change):.0%} "
+                f"{'higher' if change > 0 else 'lower'} than the baseline's.")
+
+    def stage_xcheck():
+        if not (INPUTS / 'x_counts.json').exists():
+            raise Skip('Needs the X counts.')
+        r = run_xcheck()
+        rho = r['rank_event_authors_vs_state_deaths']
+        return f"{r['provinces_n']} provinces, week of {r['week_start']}; rank correlation {'n/a' if rho is None else f'{rho:.2f}'}."
 
     def stage_forecast():
-        if not pull_x:
-            raise Skip('The X pull is off, because it costs credits.')
-        if not x.load_env().get('X_BEARER_TOKEN'):
-            raise Skip('No X_BEARER_TOKEN set.')
-        if not reference.exists():
-            raise Skip('Needs the backtest first.')
-        return f'Run {run(True, None, extractor).name} with {extractor}.'
+        if not (HISTORY / 'reference.json').exists():
+            raise Skip('Needs the backtest.')
+        saved, new = run_forecast()
+        return f"{'Written' if new else 'Frozen since'} {saved['written_at'][:10]}, issued {saved['issued']}."
 
     def stage_score():
-        if not (snapshot.exists() and reference.exists()):
-            raise Skip('Needs ACLED and the backtest.')
-        horizons = score()['horizons']
-        return f'{sum(h["forecasts"] for h in horizons.values())} resolved forecasts.' if horizons else 'No forecast has resolved yet.'
-
-    def stage_publish():
-        return 'Updated: ' + ', '.join(path.name for path in publish()) + '.'
+        if not (HISTORY / 'forecast.json').exists():
+            raise Skip('Needs the forecast.')
+        h = run_score()['horizons']
+        pending = [d for d, v in h.items() if v['status'] == 'pending']
+        if len(pending) == len(h):
+            raise Skip(f"Nothing has resolved yet; 30 days resolves about {h['30']['resolves']}.")
+        return f"Scored {len(h) - len(pending)} of {len(h)} horizons."
 
     stages = []
-    for name, action in (('VIEWS', stage_views), ('ACLED', stage_acled), ('Backtest', stage_backtest),
-                         ('Forecast', stage_forecast), ('Score', stage_score), ('Publish', stage_publish)):
+    for name, action in (('Inputs', stage_inputs), ('Backtest', stage_backtest), ('X check', stage_xcheck),
+                         ('Forecast', stage_forecast), ('Score', stage_score)):
         try:
             status, detail = 'done', action()
         except Skip as reason:
             status, detail = 'skipped', str(reason)
-        except (ValueError, OSError, requests.RequestException) as error:
-            status, detail = 'failed', str(error)[:300]
+        except (ValueError, OSError, KeyError) as error:
+            status, detail = 'failed', f'{type(error).__name__}: {error}'[:300]
         stages.append({'stage': name, 'status': status, 'detail': detail, 'at': x.now().isoformat(timespec='seconds')})
         print(f'{name}: {status}. {detail}')
     x.write_json(HISTORY / 'pipeline_status.json', {'finished_at': x.now().isoformat(timespec='seconds'), 'stages': stages})
@@ -359,61 +357,37 @@ def orchestrate(pull_x=False, extractor='rules', rebuild=False, pause=3, since='
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='command', required=True)
-    get = sub.add_parser('fetch', help='import an ACLED export and cache VIEWS runs')
-    get.add_argument('--acled', type=Path)
-    get.add_argument('--coverage-start')
-    get.add_argument('--coverage-end')
-    get.add_argument('--no-views', action='store_true')
-    get.add_argument('--pause', type=float, default=3)
-    sub.add_parser('build', help='hotspot-month targets and baselines')
-    test = sub.add_parser('backtest', help='score baselines 2023 onward and freeze the reference')
-    test.add_argument('--draws', type=int, default=1000)
-    go = sub.add_parser('run', help='live forecast')
-    go.add_argument('--fetch', action='store_true', help='pull new posts from X (costs credits)')
-    go.add_argument('--posts', type=Path, help='saved posts file instead of the latest snapshot')
-    go.add_argument('--extractor', default='rules', help='rules, or a gemini-* or claude-* model id')
-    go.add_argument('--target', type=int, default=1000)
-    sub.add_parser('score', help='score resolved live forecasts against ACLED')
-    sub.add_parser('publish', help='copy the backtest results and VIEWS map to history/')
-    plan = sub.add_parser('orchestrate', help='run every stage in order and record the outcome')
-    plan.add_argument('--pull-x', action='store_true')
-    plan.add_argument('--extractor', default='rules')
-    plan.add_argument('--rebuild', action='store_true')
-    sub.add_parser('dashboard', help='build site/index.html from history/')
+    get = sub.add_parser('ingest', help='raw ACLED, VIEWS and X data to post-free aggregates in history/inputs')
+    get.add_argument('--acled', type=Path, required=True, help='ACLED weekly aggregated CSV')
+    get.add_argument('--posts', type=Path, help='saved X posts, JSON lines')
+    get.add_argument('--offline', action='store_true', help='use the cached VIEWS catalog and runs only')
+    test = sub.add_parser('backtest')
+    test.add_argument('--draws', type=int, default=backtest.DRAWS)
+    sub.add_parser('xcheck')
+    go = sub.add_parser('forecast')
+    go.add_argument('--force', action='store_true', help='overwrite the frozen forecast')
+    sub.add_parser('score')
+    plan = sub.add_parser('orchestrate')
+    plan.add_argument('--draws', type=int, default=backtest.DRAWS)
+    sub.add_parser('dashboard')
     args = parser.parse_args()
     try:
-        if args.command == 'fetch':
-            fetch(args)
-        elif args.command == 'build':
-            rows = backtest.build()
-            meta = json.loads((x.DATA / 'panel.meta.json').read_text())
-            print(f"Panel: {len(rows)} rows, resolved through {meta['resolved_through']}.")
-            print(f"Calibration: {json.loads((x.DATA / 'calibration.json').read_text())}")
-            if meta['hotspots_without_views']:
-                print('WARNING: no VIEWS cell centre inside these boxes:', ', '.join(meta['hotspots_without_views']))
+        if args.command == 'ingest':
+            ingest(args)
         elif args.command == 'backtest':
-            print(backtest.report(args.draws))
-        elif args.command == 'run':
-            out = run(args.fetch, args.posts, args.extractor, args.target)
-            print(out)
-            for warning in json.loads((out / 'manifest.json').read_text())['warnings']:
-                print(f'WARNING: {warning}')
-            print((out / 'brief.md').read_text().split('## Evidence')[0])
+            print(json.dumps(run_backtest(args.draws)['evaluation']['scores'], indent=2))
+        elif args.command == 'xcheck':
+            print(json.dumps(run_xcheck(), indent=2))
+        elif args.command == 'forecast':
+            saved, new = run_forecast(args.force)
+            print(('Written' if new else 'Already frozen; pass --force to overwrite') + f": issued {saved['issued']}")
         elif args.command == 'score':
-            result = score()
-            print(json.dumps(result, indent=2))
-            if not result['horizons']:
-                print('No forecast has resolved yet.')
-            elif not all(h['conclusive'] for h in result['horizons'].values()):
-                print('Interim only: the specification needs 26 weekly issues across six months before any conclusion.')
-        elif args.command == 'publish':
-            for path in publish():
-                print(path)
+            print(json.dumps(run_score(), indent=2))
         elif args.command == 'orchestrate':
-            if any(stage['status'] == 'failed' for stage in orchestrate(args.pull_x, args.extractor, args.rebuild)):
+            if any(s['status'] == 'failed' for s in orchestrate(args.draws)):
                 sys.exit(1)
         else:
-            print(dashboard.build(HISTORY, x.ROOT / 'site', acled.BOXES))
+            print(dashboard.build(HISTORY, x.ROOT / 'site'))
     except ValueError as error:
         sys.exit(f'Error: {error}')
 

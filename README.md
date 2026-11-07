@@ -1,42 +1,38 @@
-# DRC escalation forecasting
+# DRC conflict deaths: forecasts against VIEWS
 
 **Live dashboard: [mhadeli.github.io/drc-escalation-forecasting](https://mhadeli.github.io/drc-escalation-forecasting/)**
 
-Do text signals beat a forecasting baseline built from ACLED history alone?
+Forecasts conflict deaths in each of the 26 provinces of the Democratic Republic of the Congo for the next 30, 60 and 90 days. One workflow runs from ingestion to evaluation with three sources:
 
-For 20 DRC hotspots, this forecasts the probability of a major escalation within 30, 60 and 90 days. A major escalation is at least one ACLED event with 10+ fatalities or a territory change. The evaluation rules were fixed before the first score in [reports/prereg.md](reports/prereg.md).
+- **ACLED:** weekly deaths by province, from 2020. It supplies the baseline and the outcomes.
+- **VIEWS:** the published forecast to compare with, taken from the run that was public on each date.
+- **X posts:** one week of posts, checked against ACLED's same week and used to adjust one live forecast.
 
-One workflow runs from ingestion to evaluation with two text sources, and compares the result with VIEWS:
+## Results so far
 
-- **Baseline:** each hotspot's own ACLED history over the trailing 12 months, with no text. It is fixed in advance.
-- **ACLED notes:** a text signal backtested from 2023 onward, because notes have history.
-- **X posts:** a text signal scored live, because X recent search reaches back only 7 days.
-- **VIEWS:** an outside comparison, using forecasts as they were published at the time, mapped to this target with one coefficient fitted on 2022.
+| Question | Answer |
+|---|---|
+| Does a baseline from ACLED history alone beat VIEWS? | Yes, at all three horizons, from January 2024 to July 2026. VIEWS's error is about 39% higher at 30 days. |
+| Does X track where people are dying? | Broadly. Rank correlation 0.82 across six provinces in the week of 17 October 2026, which is too few to prove anything. |
+| Does X improve the forecast? | Open. The live forecast issued 1 November 2026 resolves from mid-December. |
 
-## Dashboard and automation
+The evaluation rules, and when each was fixed, are in [reports/prereg.md](reports/prereg.md).
 
-The dashboard shows results, maps, the forecast against VIEWS, how each number is calculated, and the status of every stage. GitHub Actions builds it from committed files in `history/`.
+## How it runs
+
+```
+ingest (local) ──▶ align ──▶ baseline ──▶ backtest ──▶ X check ──▶ live forecast ──▶ score ──▶ dashboard
+```
+
+Ingest is the only step that reads raw data, so it runs on your machine. It writes post-free aggregates to `history/inputs/`. Pushing them starts the `pipeline` workflow on GitHub Actions, which runs the tests and every later stage, commits the results to `history/` and deploys the dashboard.
 
 | Workflow | Trigger | Does |
 |---|---|---|
-| `pipeline.yml` | Mondays, or by hand from the Actions tab | Tests, then all stages, then commits `history/` and deploys the dashboard |
-| `pages.yml` | A push that changes `history/`, `config/` or the dashboard | Rebuilds and deploys the dashboard |
+| `pipeline.yml` | A push to `history/inputs/`, or by hand | Tests, every stage after ingest, commits `history/`, deploys the dashboard |
+| `pages.yml` | A push to `history/` or the dashboard files | Rebuilds and deploys the dashboard |
 | `tests.yml` | Every push and pull request | Runs the unit tests |
 
-```
-tests ──▶ VIEWS ──▶ ACLED ──▶ Backtest ──▶ Forecast ──▶ Score ──▶ Publish ──▶ dashboard
-```
-
-A stage that lacks its inputs skips itself and says why on the dashboard, so the workflow can run before everything is set up.
-
-### One-time setup
-
-1. **Pages:** Settings → Pages → Source: GitHub Actions.
-2. **Secrets:** Settings → Secrets and variables → Actions. Add `ACLED_EMAIL` and `ACLED_PASSWORD`, plus `X_BEARER_TOKEN` and `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` when you want live forecasts.
-3. **Hotspot boxes:** the first ACLED import commits drafts to `config/hotspots.csv`. Review each box, set `reviewed=1`, and push.
-4. **Weekly X pull, optional:** it costs credits, so it is off. Set the repository variable `ENABLE_X_PULL` to `true` to schedule it, and `X_EXTRACTOR` to choose a model.
-
-ACLED's Cloudflare protection may block logins from GitHub's servers. If the ACLED stage reports that, run the backtest locally from an export and push `history/` and `config/`. The dashboard needs nothing else.
+No secrets are needed on GitHub.
 
 ## Run it locally
 
@@ -44,84 +40,61 @@ ACLED's Cloudflare protection may block logins from GitHub's servers. If the ACL
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests
 
-# 1. Export DRC events from the myACLED Data Export Tool, 2018 onward. Give the dates you filtered to.
-.venv/bin/python pipeline.py fetch --acled export.csv --coverage-start 2018-01-01 --coverage-end 2026-10-31
+# 1. Ingest. The ACLED file is the weekly aggregated export from the ACLED Data Export Tool, filtered to the DRC.
+#    VIEWS runs and province boundaries download on first use; --offline uses the cache.
+.venv/bin/python pipeline.py ingest --acled raw_data/acled_weekly.csv --posts data/raw/drc_posts.jsonl
 
-# 2. Open config/hotspots.csv, check each drafted box, and set reviewed=1. The build refuses unreviewed boxes.
+# 2. Every stage after ingest, as GitHub Actions runs them. Each also runs alone:
+#    backtest, xcheck, forecast, score.
+.venv/bin/python pipeline.py orchestrate
 
-# 3. Backtest the baseline, ACLED notes and VIEWS. The first report freezes the VIEWS mapping in history/reference.json.
-.venv/bin/python pipeline.py build
-.venv/bin/python pipeline.py backtest
-.venv/bin/python pipeline.py publish
-
-# 4. Live forecast: a new X pull, or a saved posts file. The default extractor is rules.
-.venv/bin/python pipeline.py run --fetch --extractor gemini-3.8-flash
-.venv/bin/python pipeline.py run --posts saved_posts.jsonl
-
-# 5. Import a newer ACLED export, then score whatever has resolved.
-.venv/bin/python pipeline.py score
-
-# 6. Build the dashboard and open it.
-.venv/bin/python pipeline.py dashboard
-open site/index.html
+# 3. The dashboard.
+.venv/bin/python pipeline.py dashboard && open site/index.html
 ```
 
-`pipeline.py orchestrate` runs the stages in order, as GitHub Actions does.
-
-LLM extraction needs `pip install -r requirements-llm.txt` and a key in `.env`. To test an extractor, label a sample blind and score it:
-
-```bash
-.venv/bin/python -m drc_watch.evaluate --posts saved_posts.jsonl sample   # save the labelled copy as data/labels/gold.csv
-.venv/bin/python -m drc_watch.evaluate --posts saved_posts.jsonl score --model gemini-3.8-flash
-```
+To score the live forecast, download a newer ACLED weekly file after mid-December 2026, run ingest again and push `history/inputs/`. The forecast itself never changes.
 
 ## Rules that protect the result
 
-- **As-of:** a forecast at t uses ACLED events dated at least 14 days before t, with sensitivity checks at 7 and 28 days. ACLED is a revised snapshot, so this approximates what was known then and does not reconstruct it.
-- **VIEWS vintage:** only runs released before t, with input data at least two months old.
-- **VIEWS scale:** `fatalities001` publishes `ln(fatalities+1)` under different field names. `read_forecast` in `views.py` converts it to fatalities, and later versions already publish fatalities.
-- **Notes signal:** rule patterns only, because an LLM reading old text already knows what followed.
-- **Calibration:** the coefficient sees only outcomes that resolved during 2022.
-- **Missing is missing:** absent cells, months and unresolved outcomes are never treated as zero.
-- **Live scoring:** only resolved horizons count, and only the first run of each ISO week. Conclusions wait for 26 weekly issues across six months.
+- **Information cutoff:** a forecast issued on the first of month M uses ACLED only through M-2, because ACLED is still coding M-1. VIEWS runs must be released before the issue date, with inputs at least two months old.
+- **Chosen once:** the baseline window and the VIEWS rescaling factor are fitted on 2023 and frozen in `history/reference.json`. A later run that would pick differently stops with an error.
+- **Frozen forecast:** the live forecast is written once. Rerunning the pipeline leaves it unchanged.
+- **Missing is missing:** months ACLED has not finished are never counted as zero.
 
 ## Data rules
 
-Raw posts, raw ACLED events, extractions, the LLM cache and briefs stay in `data/`, which is gitignored, or on the temporary GitHub runner. `history/` holds only forecasts, author counts per hotspot, health checks, scores and the aggregated VIEWS map. Do not add raw data to Actions artifacts or caches, because this repo is public. The code keeps no per-author reliability record, and nothing trains or fine-tunes a model on X content. Check that an LLM tier does not train on inputs before sending posts to it.
+Raw ACLED files stay in `raw_data/`, and raw posts, the VIEWS cache and boundaries stay in `data/`. Both are gitignored. `history/` holds only aggregates: monthly and recent weekly deaths per province, VIEWS province totals, X author counts per province, forecasts and scores. No post text or account names are published. Do not add raw data to Actions artifacts or caches, because this repo is public.
 
-ACLED and VIEWS results are published with attribution. Confirm with each provider that this use is allowed: access@acleddata.com for ACLED and views@pcr.uu.se for VIEWS, whose wiki states no licence.
+ACLED and VIEWS results are published with attribution. Confirm with each provider that this use is allowed: access@acleddata.com for ACLED, and views@pcr.uu.se for VIEWS, whose wiki states no licence. Province boundaries are from geoBoundaries, built from OpenStreetMap under the ODbL.
 
 ## Known limits
 
-- The 20 hotspots were chosen in 2026 knowing where fighting happened, so scores are optimistic compared with a prospective list.
-- VIEWS predicts state-based UCDP deaths, while the target covers all ACLED violence, so VIEWS is at a disadvantage and the mapping is our own.
-- The coefficient is fitted on `fatalities001` and applied to later VIEWS models. VIEWS has no usable run before July 2022, so its 2022 sample is small.
-- A box too small to contain a 0.5° cell centre has no VIEWS forecast. `build` warns about these, and they drop out of the paired scores.
-- The X multiplier weights are unlearned hypotheses, and X volume tracks attention as much as violence.
+- VIEWS predicts UCDP state-based deaths. ACLED codes events differently, so even the closest definition does not match, and the comparison is not entirely fair to VIEWS.
+- The log error rewards forecasting zero in quiet provinces, which favours carrying recent history forward.
+- ACLED is a revised snapshot. The one-month gap approximates what was known on each date but cannot reconstruct it.
+- One week of X data and one live issue cannot show whether X improves forecasts. That needs many weekly issues.
+- The X search named the eastern provinces, and X volume tracks attention as much as violence.
 
 ## Folders
 
 ```
 drc_escalation_watch/
-├── pipeline.py          command line, live run, health checks, brief, scoring, publishing
-├── drc_watch/           the code
+├── pipeline.py          command line: ingest, backtest, xcheck, forecast, score, orchestrate, dashboard
+├── drc_watch/
+│   ├── acled.py         weekly file, death definitions, weeks to months, coverage
+│   ├── provinces.py     province names, boundaries, grid cells to provinces
+│   ├── views.py         VIEWS catalog, run cache, run selection, province totals
+│   ├── forecast.py      gazetteer, rule extractor, X counts and adjustment
+│   ├── backtest.py      baseline, panel, window choice, scores, intervals
 │   ├── fetch_recent.py  X pull with daily quotas, file helpers
-│   ├── acled.py         ACLED import, hotspot boxes, targets, recent rate
-│   ├── views.py         VIEWS catalog, run cache, grid mapping, expected fatalities
-│   ├── forecast.py      gazetteer, rule extractor, X multiplier
-│   ├── extract_llm.py   LLM extraction, prompt version, cache
-│   ├── backtest.py      panel, calibration, scoreboard, report
-│   ├── evaluate.py      blind labelling sheet, field-level extractor scores
+│   ├── extract_llm.py   optional LLM extraction
+│   ├── evaluate.py      blind labelling and extractor scores
 │   ├── dashboard.py     builds the static page from history/
-│   └── dashboard.html   the page template, charts and map
+│   └── dashboard.html   the page template
 ├── .github/workflows/   tests, pipeline, dashboard
-├── config/              hotspots.csv, created by the first ACLED import
-├── reports/             prereg.md is tracked; backtest reports are gitignored
+├── reports/prereg.md    the evaluation specification
 ├── tests/
-├── history/             post-free results and pipeline status, tracked in git
-├── site/                the built dashboard, gitignored
-└── data/                gitignored: raw posts, labels, VIEWS cache, ACLED, runs, LLM cache
-    └── x_post_archive/  old project's runs, forecasts, notebook and README, kept for reference
+├── history/             aggregates, results and status, tracked in git
+├── raw_data/            gitignored: ACLED exports
+└── data/                gitignored: raw posts, VIEWS cache, boundaries, old project archive
 ```
-
-The old project's forecasts stay in the archive because they use hand-set tier priors and cannot be scored by the new `score` command.

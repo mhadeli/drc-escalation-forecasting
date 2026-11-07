@@ -10,3 +10,6 @@ reports/*
 
 # Private planning notes
 docs/
+
+# Raw ACLED exports: never commit
+raw_data/

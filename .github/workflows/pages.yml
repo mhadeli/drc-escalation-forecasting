@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths:
       - history/**
-      - config/**
+      - '!history/inputs/**'  # New inputs go through the pipeline workflow, which deploys afterwards.
       - drc_watch/dashboard*
       - .github/workflows/pages.yml
   workflow_call:
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -c "from drc_watch.dashboard import build; print(build('history', 'site', 'config/hotspots.csv'))"
+      - run: python -c "from drc_watch.dashboard import build; print(build('history', 'site'))"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

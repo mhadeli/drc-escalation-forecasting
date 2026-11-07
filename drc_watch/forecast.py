@@ -1,4 +1,4 @@
-"""Hotspot names, a rule extractor, and the unlearned live X adjustment."""
+"""Place names, a rule extractor, X author counts per province, and the pre-set X adjustment."""
 
 import hashlib
 import math
@@ -7,25 +7,26 @@ import unicodedata
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-HORIZONS = (30, 60, 90)
+HORIZONS = {30: 1, 60: 2, 90: 3}  # Days, and the calendar months they cover from the first of the issue month.
 SIGNAL_DECAY_DAYS = 21
-TARGET = "at least one ACLED event with 10+ fatalities or a territory change"
+X_EXPONENT = .5      # Shrinks the ratio of X attention to expected deaths; fixed before any score.
+X_LIMITS = (.5, 2.0)
 
-# province, aliases. No hindsight-based risk tiers. Boundaries live in config/hotspots.csv.
+# Hotspot: (province as ACLED spells it, aliases). Used to place posts, not to score.
 HOTSPOTS = {
-    'Walungu (Kaziba, Muhungu, Kamanyola)': ('South Kivu', ('walungu', 'kaziba', 'muhungu', 'munanira', 'bideka', 'kamanyola', 'nyangezi')),
-    'Uvira (Ruzizi plain)': ('South Kivu', ('uvira', 'luvungi', 'katogota', 'sange', 'kiliba', 'luberizi')),
-    'Fizi (Minembwe, Hauts Plateaux)': ('South Kivu', ('fizi', 'minembwe', 'kabanja', 'baraka', 'bibokoboko')),
-    'Mwenga (Itombwe, Kamituga)': ('South Kivu', ('mwenga', 'itombwe', 'kamituga', 'mikenge')),
-    'Kalehe (Minova, Numbi)': ('South Kivu', ('kalehe', 'minova', 'numbi', 'nyabibwe', 'lumbishi')),
-    'Kabare / Bukavu': ('South Kivu', ('kabare', 'kavumu', 'katana', 'bukavu')),
-    'Shabunda': ('South Kivu', ('shabunda',)),
-    'Goma / Nyiragongo': ('North Kivu', ('goma', 'nyiragongo')),
-    'Masisi': ('North Kivu', ('masisi', 'sake', 'kitchanga', 'mweso', 'ngungu', 'nyabiondo')),
-    'Rutshuru': ('North Kivu', ('rutshuru', 'bwito', 'kiwanja', 'bunagana', 'kanyabayonga', 'tongo')),
-    'Walikale': ('North Kivu', ('walikale', 'pinga', 'mpofi')),
-    'Lubero / Butembo': ('North Kivu', ('lubero', 'butembo', 'kirumba', 'kipese', 'alimbongo')),
-    'Beni': ('North Kivu', ('beni', 'oicha', 'eringeti', 'mbau', 'kamango', 'mangina', 'maboya')),
+    'Walungu (Kaziba, Muhungu, Kamanyola)': ('Sud-Kivu', ('walungu', 'kaziba', 'muhungu', 'munanira', 'bideka', 'kamanyola', 'nyangezi')),
+    'Uvira (Ruzizi plain)': ('Sud-Kivu', ('uvira', 'luvungi', 'katogota', 'sange', 'kiliba', 'luberizi')),
+    'Fizi (Minembwe, Hauts Plateaux)': ('Sud-Kivu', ('fizi', 'minembwe', 'kabanja', 'baraka', 'bibokoboko')),
+    'Mwenga (Itombwe, Kamituga)': ('Sud-Kivu', ('mwenga', 'itombwe', 'kamituga', 'mikenge')),
+    'Kalehe (Minova, Numbi)': ('Sud-Kivu', ('kalehe', 'minova', 'numbi', 'nyabibwe', 'lumbishi')),
+    'Kabare / Bukavu': ('Sud-Kivu', ('kabare', 'kavumu', 'katana', 'bukavu')),
+    'Shabunda': ('Sud-Kivu', ('shabunda',)),
+    'Goma / Nyiragongo': ('Nord-Kivu', ('goma', 'nyiragongo')),
+    'Masisi': ('Nord-Kivu', ('masisi', 'sake', 'kitchanga', 'mweso', 'ngungu', 'nyabiondo')),
+    'Rutshuru': ('Nord-Kivu', ('rutshuru', 'bwito', 'kiwanja', 'bunagana', 'kanyabayonga', 'tongo')),
+    'Walikale': ('Nord-Kivu', ('walikale', 'pinga', 'mpofi')),
+    'Lubero / Butembo': ('Nord-Kivu', ('lubero', 'butembo', 'kirumba', 'kipese', 'alimbongo')),
+    'Beni': ('Nord-Kivu', ('beni', 'oicha', 'eringeti', 'mbau', 'kamango', 'mangina', 'maboya')),
     'Djugu': ('Ituri', ('djugu', 'pimbo', 'fataki', 'lodda', 'bule', 'savo', 'largu', 'nizi', 'drodro')),
     'Irumu / Bunia': ('Ituri', ('irumu', 'komanda', 'bunia')),
     'Mambasa': ('Ituri', ('mambasa', 'biakato')),
@@ -130,6 +131,17 @@ HISTORICAL = ('\\b(19[5-9]\\d|200\\d|201\\d|202[0-4])\\b.*\\b(attaque|attack|mas
  '\\bmemorial\\b',
  '\\bhommage\\b')
 
+# Province names on their own, written as people write them. Matched on normalized text.
+PROVINCE_PATTERNS = {
+    'Nord-Kivu': (r'\bnord[- ]kivu\b', r'\bnorth[- ]kivu\b'),
+    'Sud-Kivu': (r'\bsud[- ]kivu\b', r'\bsouth[- ]kivu\b'),
+    'Ituri': (r'\bituri\b',),
+    'Tanganyika': (r'\btanganyika\b',),
+    'Mai-Ndombe': (r'\bmai[- ]?ndombe\b',),
+    'Kinshasa': (r'\bkinshasa\b',),
+}
+X_PROVINCES = tuple(PROVINCE_PATTERNS)
+
 DRC_CONTEXT = ('kivu', 'ituri', 'rdc', 'congo', 'fardc', 'm23', 'wazalendo', 'codeco', 'adf', 'frn', 'kinshasa')
 
 
@@ -155,6 +167,8 @@ def classify(post):
         'fingerprint': hashlib.sha256(text.encode()).hexdigest(),
         'on_topic': bool(places or tokens.intersection(DRC_CONTEXT)),
         'historical': historical, 'hotspots': places,
+        'provinces': sorted({HOTSPOTS[name][0] for name in places}
+                            | {name for name, patterns in PROVINCE_PATTERNS.items() if any(re.search(p, text) for p in patterns)}),
         'actors': [name for name, aliases in ACTORS.items() if tokens.intersection(aliases)],
         **{name: any(re.search(p, text) for p in patterns) for name, patterns in SIGNALS.items()},
     }
@@ -169,60 +183,43 @@ def resolve_hotspot(value):
     return None
 
 
-def hotspot_signals(tagged, issued_at=None):
-    issued_at = issued_at or datetime.now(timezone.utc)
-    cutoff = issued_at - timedelta(hours=48)
-    counts = {name: defaultdict(set) for name in HOTSPOTS}
-    seen = {name: set() for name in HOTSPOTS}
+def province_signals(tagged, issued_at):
+    """Distinct authors per province. A post counts for every province it names; each author counts once per signal."""
+    counts = {name: defaultdict(set) for name in X_PROVINCES}
+    seen = {name: set() for name in X_PROVINCES}
     for row in tagged:
         if not row['on_topic'] or row['historical'] or row.get('extraction_error'):
             continue
         posted = datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))
         if posted > issued_at:
             raise ValueError('A post is dated after the forecast issue time.')
-        for name in row['hotspots']:
+        provinces = row.get('provinces') or sorted({HOTSPOTS[name][0] for name in row['hotspots'] if name in HOTSPOTS})
+        for name in provinces:
             if row['fingerprint'] in seen[name]:
-                continue
+                continue  # Copies of the same text count once.
             seen[name].add(row['fingerprint'])
             author = row.get('author_id') or row['id']
-            spot = counts[name]
-            spot['authors'].add(author)
+            counts[name]['authors'].add(author)
             for signal in SIGNALS:
                 if row[signal]:
-                    spot[signal].add(author)
-            if row['event'] and posted >= cutoff:
-                spot['event_last_48h'].add(author)
-    return {name: {key: len(spot[key]) for key in ('authors', *SIGNALS, 'event_last_48h')}
-            for name, spot in counts.items()}
+                    counts[name][signal].add(author)
+    return {name: {key: len(spot[key]) for key in ('authors', *SIGNALS)} for name, spot in counts.items()}
 
 
-def signal_multiplier(spot):
-    weights = {'event': .25, 'event_last_48h': .15, 'control_change': .35,
-               'escalation': .20, 'deescalation': -.30}
-    log_m = sum(weight * math.log1p(spot[key]) for key, weight in weights.items())
-    return min(6.0, max(.5, math.exp(log_m)))
+def x_multipliers(event_authors, baseline_deaths):
+    """Share of X event authors against share of expected deaths, across the X provinces.
+
+    m = (x_share / baseline_share) ** 0.5, limited to 0.5-2, with one added to every count so a quiet
+    province is not divided by zero. X moves expected deaths between provinces; it is not learned.
+    """
+    names = list(event_authors)
+    x_total = sum(event_authors[n] + 1 for n in names)
+    b_total = sum(baseline_deaths[n] + 1 for n in names)
+    low, high = X_LIMITS
+    return {n: min(high, max(low, (((event_authors[n] + 1) / x_total) / ((baseline_deaths[n] + 1) / b_total)) ** X_EXPONENT))
+            for n in names}
 
 
-def note_cues(text):
-    """Forward-looking cues in an ACLED note. Events and deaths are already in the structured fields."""
-    text = normalize(text)
-    return {name: any(re.search(p, text) for p in SIGNALS[name]) for name in ('control_change', 'escalation', 'deescalation')}
-
-
-def note_multiplier(counts):
-    """The X weights for these three cues, unlearned, with the same limits."""
-    weights = {'control_change': .35, 'escalation': .20, 'deescalation': -.30}
-    return min(6.0, max(.5, math.exp(sum(weight * math.log1p(counts[key]) for key, weight in weights.items()))))
-
-
-def adjust(probabilities, multiplier):
-    """Adjust cumulative hazards; never multiply probabilities directly."""
-    result, previous = {}, 0.0
-    for horizon in HORIZONS:
-        p = probabilities[horizon]
-        average = 1 + (multiplier - 1) * SIGNAL_DECAY_DAYS / horizon * (-math.expm1(-horizon / SIGNAL_DECAY_DAYS))
-        changed = 1.0 if p == 1 else -math.expm1(math.log1p(-p) * average)
-        previous = max(previous, changed)
-        result[horizon] = previous
-    return result
-
+def decayed(multiplier, days):
+    """Average of a multiplier that fades with a 21-day time constant over the first `days` days."""
+    return 1 + (multiplier - 1) * SIGNAL_DECAY_DAYS / days * (-math.expm1(-days / SIGNAL_DECAY_DAYS))

@@ -1,60 +1,38 @@
-"""Static dashboard from history/ and the hotspot boxes: no API calls and no post text."""
+"""Static dashboard from history/: no API calls, no post text, no raw ACLED rows."""
 
-import base64
-import csv
 import json
 from pathlib import Path
 
 TEMPLATE = Path(__file__).with_name('dashboard.html')
-
-# Approximate territory centres for map labels; not exact event locations and not used in any score.
-CENTRES = {
-    'Walungu (Kaziba, Muhungu, Kamanyola)': (-2.75, 28.75), 'Uvira (Ruzizi plain)': (-3.10, 29.10),
-    'Fizi (Minembwe, Hauts Plateaux)': (-3.85, 28.90), 'Mwenga (Itombwe, Kamituga)': (-3.10, 28.35),
-    'Kalehe (Minova, Numbi)': (-1.95, 28.95), 'Kabare / Bukavu': (-2.50, 28.86), 'Shabunda': (-2.69, 27.34),
-    'Goma / Nyiragongo': (-1.68, 29.22), 'Masisi': (-1.40, 28.82), 'Rutshuru': (-1.19, 29.45),
-    'Walikale': (-1.42, 28.05), 'Lubero / Butembo': (0.00, 29.15), 'Beni': (0.49, 29.47), 'Djugu': (1.92, 30.50),
-    'Irumu / Bunia': (1.56, 30.25), 'Mambasa': (1.36, 29.05), 'Mahagi / Aru': (2.60, 30.90),
-    'Tanganyika': (-5.94, 29.19), 'Kwamouth (Mobondo)': (-3.18, 16.22), 'Kinshasa (political violence)': (-4.32, 15.31),
-}
 
 
 def read(path):
     return json.loads(path.read_text()) if path.exists() else None
 
 
-def image(path):
-    return f'data:image/png;base64,{base64.b64encode(path.read_bytes()).decode()}' if path.exists() else None
+def collect(history):
+    inputs = history / 'inputs'
+    acled = read(inputs / 'acled.json')
+    views = read(inputs / 'views.json')
+    x = read(inputs / 'x_counts.json')
+    return {
+        'backtest': read(history / 'backtest.json'), 'xcheck': read(history / 'x_check.json'),
+        'forecast': read(history / 'forecast.json'), 'live': read(history / 'live_scores.json'),
+        'reference': read(history / 'reference.json'), 'status': read(history / 'pipeline_status.json'),
+        'ingest': read(history / 'ingest_status.json'), 'geo': read(inputs / 'provinces.geojson'),
+        # Metadata only: the dashboard does not need the full monthly tables.
+        'acled': None if not acled else {k: acled.get(k) for k in ('source', 'rows', 'first_week', 'last_week', 'coverage_end',
+                                                               'complete_through', 'definitions', 'primary')},
+        'views': None if not views else {'cells': views.get('cells'), 'border_cells': views.get('border_cells'),
+                                         'cells_per_province': views.get('cells_per_province'), 'boundaries': views.get('boundaries')},
+        'x': None if not x else {k: x.get(k) for k in ('first_post', 'last_post', 'posts', 'usable_posts', 'authors',
+                                                   'posts_per_day', 'languages', 'extractor')},
+    }
 
 
-def boxes(path):
-    if not path or not Path(path).exists():
-        return {}
-    with Path(path).open(newline='') as handle:
-        rows = list(csv.DictReader(handle))
-    return {r['hotspot']: {'bounds': [float(r[k]) for k in ('south', 'west', 'north', 'east')], 'reviewed': r['reviewed'] == '1'}
-            for r in rows if r['south']}
-
-
-def collect(history, boxes_path):
-    runs = []
-    for path in sorted(history.glob('runs/*/forecast.json')):
-        saved = read(path)
-        saved['health'] = read(path.with_name('health.json'))
-        saved['scores'] = read(path.with_name('scores.json'))
-        runs.append(saved)
-    return {'runs': runs, 'live': read(history / 'live_scores.json'), 'backtest': read(history / 'backtest' / 'scores.json'),
-            'hotspots': read(history / 'backtest' / 'hotspots.json'), 'views': read(history / 'views_map.json'),
-            'status': read(history / 'pipeline_status.json'), 'reference': read(history / 'reference.json'),
-            'centres': CENTRES, 'boxes': boxes(boxes_path),
-            'plots': {'recent': image(history / 'backtest' / 'reliability_recent.png'),
-                      'text': image(history / 'backtest' / 'reliability_text.png'),
-                      'views': image(history / 'backtest' / 'reliability_views.png')}}
-
-
-def build(history, site, boxes_path=None):
+def build(history, site):
     history, site = Path(history), Path(site)
-    payload = json.dumps(collect(history, boxes_path), ensure_ascii=False, allow_nan=False).replace('</', '<\\/')
+    payload = json.dumps(collect(history), ensure_ascii=False, allow_nan=False).replace('</', '<\\/')
     site.mkdir(parents=True, exist_ok=True)
     (site / 'index.html').write_text(TEMPLATE.read_text().replace('/*DATA*/null', payload))
     return site / 'index.html'

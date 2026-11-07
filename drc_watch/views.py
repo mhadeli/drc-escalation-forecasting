@@ -1,17 +1,16 @@
 """Dated VIEWS production runs, complete local caches, and PRIO-GRID mapping."""
 
-import calendar
 import csv
 import json
 import math
 import re
 import time
-from datetime import date, timedelta
+from datetime import date
 from urllib.parse import urlparse
 
 import requests
 
-from drc_watch.acled import inside, month_shift
+from drc_watch.acled import shift
 from drc_watch.fetch_recent import DATA, checksum, now, write_csv, write_json
 
 OUT = DATA / 'views'
@@ -139,61 +138,43 @@ def month_id(day):
     return (day.year - 1980) * 12 + day.month
 
 
+def month_index(key):
+    """VIEWS month_id for 'YYYY-MM': January 1980 is 1."""
+    year, month = map(int, key.split('-'))
+    return (year - 1980) * 12 + month
+
+
 def select_run(runs, issue):
-    cutoff = month_shift(issue.replace(day=1), -2).isoformat()
+    """Newest run released strictly before the issue date, with input data at least two calendar months old."""
+    cutoff = shift(f'{issue.year}-{issue.month:02d}', -2) + '-01'
     candidates = [r for r in runs if r['released'] < issue.isoformat() and r['last_input'] <= cutoff]
     return max(candidates, key=lambda r: (r['last_input'], r['released'], r['run']), default=None)
 
 
-def load_monthly(run, boxes):
-    """Sum cell means; preserve missing cell-months as missing, not zero."""
-    path = OUT / f'{run}.csv'
-    meta_path = OUT / f'{run}.meta.json'
+def read_run(run):
+    path, meta_path = OUT / f'{run}.csv', OUT / f'{run}.meta.json'
     if not path.exists() or not meta_path.exists():
-        return {}
+        raise ValueError(f'VIEWS run {run} is not cached. Run pipeline.py ingest with network access.')
     if checksum(path) != json.loads(meta_path.read_text())['sha256']:
         raise ValueError(f'VIEWS cache checksum mismatch: {run}')
     with path.open(newline='') as handle:
-        rows = list(csv.DictReader(handle))
-    by_month, all_cells = {}, set()
-    for row in rows:
-        gid, month = int(row['pg_id']), int(row['month_id'])
-        by_month.setdefault(month, {})[gid] = float(row['main_mean'])
-        all_cells.add(gid)
-    result = {}
-    for name, bounds in boxes.items():
-        cells = {gid for gid in all_cells if inside(*cell_center(gid), bounds)}
-        result[name] = {month: sum(values[gid] for gid in cells)
-                        for month, values in by_month.items() if cells and cells <= values.keys()}
-    return result
+        return [(int(r['pg_id']), int(r['month_id']), float(r['main_mean'])) for r in csv.DictReader(handle)]
 
 
-def latest_map(issue):
-    """Expected fatalities per grid cell over the next three calendar months, from the newest eligible run."""
-    run = select_run(catalog(), issue)
-    if not run:
-        raise ValueError(f'No VIEWS run was available on {issue}.')
-    months = [month_id(issue) + i for i in (1, 2, 3)]
-    totals = {}
-    with (OUT / f"{run['run']}.csv").open(newline='') as handle:
-        for row in csv.DictReader(handle):
-            if int(row['month_id']) in months:
-                totals[int(row['pg_id'])] = totals.get(int(row['pg_id']), 0) + float(row['main_mean'])
-    if not totals:
-        raise ValueError(f"{run['run']} does not cover the next three months.")
-    return {**run, 'issue': issue.isoformat(), 'months': months, 'total': round(sum(totals.values()), 1),
-            'cells': [[*cell_center(gid), round(value, 3)] for gid, value in sorted(totals.items())]}
-
-
-def expected(monthly, issue, horizon):
-    """Exact day windows; monthly means are assumed uniform within a month."""
-    start, end, total = issue + timedelta(days=1), issue + timedelta(days=horizon), 0.0
-    while start <= end:
-        key = month_id(start)
-        if key not in monthly:
-            return None
-        days = calendar.monthrange(start.year, start.month)[1]
-        stop = min(end, start.replace(day=days))
-        total += monthly[key] * ((stop - start).days + 1) / days
-        start = stop + timedelta(days=1)
-    return total
+def province_totals(run, cell_province, months):
+    """{province: {'YYYY-MM': expected deaths}} for the given months. A month absent from the run stays absent."""
+    wanted = {month_index(key): key for key in months}
+    totals, seen = {}, {}
+    for gid, month, value in read_run(run):
+        if month not in wanted:
+            continue
+        if gid not in cell_province:
+            raise ValueError(f'VIEWS cell {gid} in {run} has no province; rebuild the cell map.')
+        name, key = cell_province[gid], wanted[month]
+        totals.setdefault(name, {}).setdefault(key, 0.0)
+        totals[name][key] += value
+        seen.setdefault(key, set()).add(gid)
+    for key, cells in seen.items():
+        if cells != set(cell_province):
+            raise ValueError(f'{run} covers {len(cells)} of {len(cell_province)} cells in {key}; incomplete runs are not summed.')
+    return {name: {key: round(value, 4) for key, value in series.items()} for name, series in totals.items()}

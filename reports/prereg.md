@@ -1,62 +1,76 @@
-# Evaluation specification, version 2
+# Evaluation specification, version 3
 
-Written before this implementation's first score. Changes require a new version.
+Version 3, 2026-11-07. The question changed from the probability of a major escalation in 20 hotspots to
+fatalities per province, because the ACLED data available is the weekly aggregated product, by province.
+Versions 1 and 2 are in the git history.
 
-Version 2, 2026-11-06, no score existed. The baseline is now fixed to ACLED history instead of chosen
-between it and VIEWS; VIEWS becomes a comparison; ACLED notes add a text signal that can be backtested.
-Version 1 is in the git history.
+## What was fixed when
 
-- Question: do text signals beat a forecasting baseline built from ACLED history alone?
-  ACLED notes answer this historically. X posts answer it live, because X has no usable history.
-  VIEWS is reported beside both as an external comparison, and it is not a candidate baseline.
-- Target: at least one ACLED event with 10+ reported fatalities or a sub-event
-  type containing `territory`, in a reviewed hotspot box in `(issue, issue+h]`.
-  Displacement is excluded from both historical and live targets.
-- Monthly historical issues: 2023-01 onward; require a resolved 90-day outcome.
-- Event history: trailing 12 calendar months ending 14 days before issue;
-  sensitivity checks at 7 and 28 days. Never use ACLED's modification timestamp
-  to simulate when a record first became available.
-- Recent rate: count distinct months containing a major event, then
-  lambda = (k + 0.5) / 12.5; p(h) = 1 - exp(-lambda*h/30).
-  This is the plan's smoothed Poisson approximation to monthly occupancy.
-- VIEWS: only runs published strictly before issue and with last input month
-  at least two calendar months earlier. Choose the newest input month, then
-  release, then model version. Cache complete paginated responses.
-- VIEWS expected fatalities are summed over cell centres inside each box.
-  Prorate monthly means by the exact days in `(issue, issue+h]`; this assumes
-  a constant within-month rate. Do not treat missing cells/months as zero.
-- Mapping p = 1 - exp(-c*expected_fatalities): one nonnegative c minimizing
-  pooled Brier loss on 2022 issues whose outcomes also resolve during 2022.
-  Freeze c before evaluating 2023 onward.
-- Primary comparison: paired Brier scores at 30, 60 and 90 days for lag 14.
-  Report AUC, reliability, onset cases (no major event in six prior months),
-  province splits, and 7/28-day lag sensitivity. Use the same complete cases
-  for both baselines. Show counts and all missing coverage.
-- Intervals: 1,000 paired bootstrap draws of three consecutive issue months,
-  retaining all hotspots within each month; report 5th/95th percentiles.
-- Notes signal: in each hotspot, count notes with control-change, escalation and de-escalation cues
-  in the 30 days ending at the lag cutoff, using the rule patterns only, because an LLM reading old
-  text already knows what followed. m = exp(.35*ln(1+control) + .20*ln(1+escalation) - .30*ln(1+deescalation)),
-  limited to 0.5-6. Adjust cumulative hazards with the same 21-day decay. These weights are unlearned.
-- Decision: notes beat the baseline only if the 90% skill interval is above zero at all three primary horizons.
-  Freeze the VIEWS coefficient for subsequent live runs.
-- Live: retain the original X multiplier weights and 21-day decay as unlearned
-  hypotheses. Adjust the ACLED-history baseline's cumulative hazards, preserving
-  monotonic 30/60/90-day probabilities. Evaluate only resolved horizons with
-  confirmed source coverage and record the ACLED snapshot hash/retrieval date.
-- Interim at three months; conclusions only after at least 26 weekly issues
-  spanning six calendar months. Overlapping forecasts are not independent.
+Be clear about the order, because it decides what each result can claim.
+
+- The backtest rules below were written together with the first backtest run on 2026-11-07. The baseline
+  window is chosen by rule on 2023 only, and 2024 onward is scored, so the scored period never informed a choice.
+- The rescaled VIEWS comparison was added after the first run showed that VIEWS predicts fewer deaths than
+  ACLED records. It is a secondary check and does not change the decision rule.
+- The X adjustment was fixed before any live outcome existed. The X check on the week of 17 October was run
+  on the same day, and the adjustment was not changed after seeing it.
+
+## Question
+
+Forecast conflict deaths per DRC province for the next 30, 60 and 90 days. Test a baseline built from ACLED
+history alone against VIEWS, and test whether X posts add information.
+
+## Definitions
+
+- Deaths: ACLED fatalities in Battles plus Explosions/Remote violence, the closest ACLED match to VIEWS's
+  state-based UCDP deaths. Adding Violence against civilians is reported as a second view.
+- Units: the 26 DRC provinces as ACLED names them. Rows for the Republic of Congo are dropped by country.
+- Months: ACLED weeks start on Saturday. A week crossing a month end is split by days.
+- Complete months: a month counts only when the data run at least 14 days past its end. Incomplete months
+  are missing, never zero.
+- Issue: the first day of month M. Horizons of 30, 60 and 90 days cover M, M..M+1 and M..M+2.
+
+## Forecasts
+
+- Baseline: mean monthly deaths over a window of w months ending at M-2, times the horizon's months. The
+  month M-1 is left out because ACLED is still coding it on the issue date.
+- Window: w in {1, 3, 6, 12}. Choose the lowest mean log error on 2023 issues, all horizons pooled. Freeze it
+  in history/reference.json. A later run that would pick a different window fails.
+- VIEWS: the newest run released strictly before the issue date, with its last input month at least two
+  months earlier. Each grid cell goes to the province containing its centre, or the nearest province for
+  border cells. Sum the cells and the horizon's months. Cells missing from a run make it unusable.
+- VIEWS rescaled: VIEWS times one factor equal to ACLED's 2023 total over VIEWS's 2023 total at 30 days.
+- X adjustment: across the six provinces the X gazetteer covers, compare each province's share of X authors
+  posting about violence with its share of baseline 30-day deaths, adding one to every count.
+  m = (x_share / baseline_share) ^ 0.5, limited to 0.5-2. It fades with a 21-day time constant:
+  a(h) = 1 + (m - 1)(21/h)(1 - exp(-h/21)). Baseline + X = baseline(h) x a(h).
+
+## Scoring
+
+- Error: mean |ln(1 + forecast) - ln(1 + actual)| over province-issues. Skill of VIEWS against the baseline is
+  1 - error_VIEWS / error_baseline.
+- Rank correlation: Spearman across provinces within each issue, averaged over issues.
+- Intervals: 1,000 resamples of blocks of consecutive issues, at least three months long, keeping all
+  provinces of an issue together. Report the 5th and 95th percentiles.
+- Backtest period: issues from 2024-01 to the last issue whose 90-day outcome is complete. 2023 is reported
+  separately as the selection year.
+- Sensitivity: the baseline using M-1 as well, as if ACLED had no reporting lag.
+- Decision: the baseline beats VIEWS if the 90% skill interval is below zero at all three horizons.
+  VIEWS beats the baseline if it is above zero at all three.
+
+## X
+
+- X check: X authors posting about violence per province, from posts in one ACLED week, against ACLED deaths
+  in that week. Spearman across the six provinces. With six provinces this is a sanity check, not a test.
+- Live: one forecast issued 2026-11-01, using ACLED through 2026-09, X posts from 18 to 22 October 2026 and
+  VIEWS run fatalities003_2026_09_t01. It is written once and never changed. Each horizon is scored when
+  ACLED has completed its months. One issue cannot show whether X helps.
 
 ## Limits that must accompany every report
 
-The 20 hotspots were selected with hindsight. Bounding boxes approximate
-administrative areas and can overlap. ACLED is a revised snapshot: an event-date
-lag is a sensitivity assumption, not a reconstruction of historical publication
-availability. VIEWS predicts state-based UCDP fatalities; our ACLED target also
-includes other violence. Its mapping is our derived benchmark, not VIEWS's own
-probability of major escalation. Historical 2022 release delays reduce the
-available calibration sample. Source coverage dates are operator assertions,
-not inferred from the first/last recorded event. ACLED notes describe events after
-coders reviewed them and may be revised, so a notes backtest can be optimistic.
-Notes and X posts are different kinds of text, so a notes result does not establish
-that X would do the same. Check data terms before sharing.
+VIEWS predicts UCDP state-based deaths and ACLED codes events differently, so no ACLED definition matches
+exactly, and this comparison is not entirely fair to VIEWS. ACLED is a revised snapshot, so leaving out the
+latest month approximates what was known at each date and cannot reconstruct it. Splitting weeks by days
+assumes deaths are even within a week. The log error rewards forecasting zero in quiet provinces, which
+favours persistence. The X search named the eastern provinces, so X attention there is partly by design, and
+X volume tracks attention as much as violence. Check data terms before sharing.
