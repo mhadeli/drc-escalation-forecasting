@@ -8,6 +8,11 @@ on:
     branches: [main]
     paths:
       - history/inputs/**
+      - pipeline.py
+      - drc_watch/**
+      - reports/prereg.md
+      - requirements.txt
+      - .github/workflows/pipeline.yml
   workflow_dispatch:
 
 concurrency:

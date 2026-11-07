@@ -8,12 +8,24 @@
       "2023-01",
       "2023-12"
     ],
+    "version": 3,
     "errors": {
       "1": 0.5792397662996235,
       "3": 0.5800457177058589,
       "6": 0.6010546239260337,
-      "12": 0.6311939047864187
+      "12": 0.6311939047864188
     }
+  },
+  "selection_sensitivity": {
+    "window": 3,
+    "outcomes_through": "2023-12",
+    "errors": {
+      "1": 0.5662156042663229,
+      "3": 0.5445263786551756,
+      "6": 0.569214246917753,
+      "12": 0.6226898916350627
+    },
+    "note": "Restricts selection outcomes to 2023; does not replace the frozen reference."
   },
   "evaluation": {
     "first_issue": "2024-01",
@@ -22,6 +34,7 @@
       "30": {
         "issues": 31,
         "forecasts": 806,
+        "excluded": 0,
         "error_baseline": 0.4303068074839957,
         "error_views": 0.5965732902096574,
         "skill_views": -0.386390547009521,
@@ -30,10 +43,12 @@
           -0.17626060702394278
         ],
         "error_views_scaled": 0.6565290740740578,
+        "death_weighted_error_baseline": 0.8274376469216022,
+        "death_weighted_error_views": 1.0846515428778143,
         "skill_views_scaled": -0.5257231878639892,
         "skill_views_scaled_90": [
           -0.8409140111867639,
-          -0.26709838922949874
+          -0.26709838922949897
         ],
         "rank_baseline": 0.5882784944490995,
         "rank_views": 0.502633756080718,
@@ -44,18 +59,21 @@
       "60": {
         "issues": 31,
         "forecasts": 806,
+        "excluded": 0,
         "error_baseline": 0.5622287201652959,
         "error_views": 0.771668649111015,
         "skill_views": -0.37251730734094024,
         "skill_views_90": [
-          -0.5952601252572638,
+          -0.595260125257264,
           -0.17872000455776238
         ],
-        "error_views_scaled": 0.8380966037476699,
-        "skill_views_scaled": -0.4906684302809514,
+        "error_views_scaled": 0.8380966037476701,
+        "death_weighted_error_baseline": 0.8477148456511819,
+        "death_weighted_error_views": 1.087692545252589,
+        "skill_views_scaled": -0.49066843028095186,
         "skill_views_scaled_90": [
           -0.7664190904454701,
-          -0.2598121706729447
+          -0.25981217067294493
         ],
         "rank_baseline": 0.5823062124042353,
         "rank_views": 0.525316113506131,
@@ -66,14 +84,17 @@
       "90": {
         "issues": 31,
         "forecasts": 806,
+        "excluded": 0,
         "error_baseline": 0.6619155920859059,
         "error_views": 0.872073372191692,
         "skill_views": -0.3174993649016671,
         "skill_views_90": [
           -0.4867900302327463,
-          -0.16389597216003593
+          -0.16389597216003615
         ],
         "error_views_scaled": 0.9456501325346451,
+        "death_weighted_error_baseline": 0.8407006872025572,
+        "death_weighted_error_views": 1.0808984258765415,
         "skill_views_scaled": -0.42865668046072414,
         "skill_views_scaled_90": [
           -0.6405746373542417,
@@ -91,6 +112,7 @@
     "30": {
       "issues": 12,
       "forecasts": 312,
+      "excluded": 0,
       "error_baseline": 0.4458579280721565,
       "error_views": 0.48244195139671303,
       "skill_views": -0.08205309588806031,
@@ -98,10 +120,12 @@
         -0.36508311864502985,
         0.14236614437373665
       ],
-      "error_views_scaled": 0.5376357399573823,
-      "skill_views_scaled": -0.2058454187011176,
+      "error_views_scaled": 0.5376357399573822,
+      "death_weighted_error_baseline": 0.9048334337348504,
+      "death_weighted_error_views": 0.7422656464117499,
+      "skill_views_scaled": -0.2058454187011174,
       "skill_views_scaled_90": [
-        -0.5638439526249055,
+        -0.563843952624905,
         0.06084592814528078
       ],
       "rank_baseline": 0.5856693811006493,
@@ -113,15 +137,18 @@
     "60": {
       "issues": 12,
       "forecasts": 312,
-      "error_baseline": 0.5883541668570554,
+      "excluded": 0,
+      "error_baseline": 0.5883541668570555,
       "error_views": 0.6847822115247205,
-      "skill_views": -0.16389455552388887,
+      "skill_views": -0.16389455552388865,
       "skill_views_90": [
         -0.5305058679810766,
         0.08531379451119148
       ],
       "error_views_scaled": 0.7473296299528224,
-      "skill_views_scaled": -0.2702036835143058,
+      "death_weighted_error_baseline": 0.7543153641273036,
+      "death_weighted_error_views": 0.7599957168598929,
+      "skill_views_scaled": -0.27020368351430557,
       "skill_views_scaled_90": [
         -0.7577399465247994,
         0.028809219984560985
@@ -135,6 +162,7 @@
     "90": {
       "issues": 12,
       "forecasts": 312,
+      "excluded": 0,
       "error_baseline": 0.7035072039696586,
       "error_views": 0.8301650550416878,
       "skill_views": -0.1800377456795621,
@@ -143,10 +171,12 @@
         0.05126371249849926
       ],
       "error_views_scaled": 0.8961051782743579,
+      "death_weighted_error_baseline": 0.7273540117571335,
+      "death_weighted_error_views": 0.7434895598233783,
       "skill_views_scaled": -0.27376830431576615,
       "skill_views_scaled_90": [
         -0.7635649278402046,
-        0.012528219175705159
+        0.012528219175705055
       ],
       "rank_baseline": 0.5684919956151463,
       "rank_views": 0.4485329158845734,
@@ -159,14 +189,17 @@
     "30": {
       "issues": 31,
       "forecasts": 806,
+      "excluded": 0,
       "error_baseline": 0.3814059993171023,
       "error_views": 0.5965732902096574,
       "skill_views": -0.5641423870568547,
       "skill_views_90": [
         -0.9098922714075152,
-        -0.28527397107923824
+        -0.2852739710792381
       ],
       "error_views_scaled": 0.6565290740740578,
+      "death_weighted_error_baseline": 0.7974878422316206,
+      "death_weighted_error_views": 1.0846515428778143,
       "skill_views_scaled": -0.7213391379515697,
       "skill_views_scaled_90": [
         -1.1343968444329129,
@@ -181,18 +214,21 @@
     "60": {
       "issues": 31,
       "forecasts": 806,
+      "excluded": 0,
       "error_baseline": 0.5431961385231926,
       "error_views": 0.771668649111015,
       "skill_views": -0.4206077591217401,
       "skill_views_90": [
-        -0.705093684464508,
-        -0.19197937486378172
+        -0.7050936844645085,
+        -0.19197937486378175
       ],
-      "error_views_scaled": 0.8380966037476699,
-      "skill_views_scaled": -0.5428986774947151,
+      "error_views_scaled": 0.8380966037476701,
+      "death_weighted_error_baseline": 0.8061009504245087,
+      "death_weighted_error_views": 1.087692545252589,
+      "skill_views_scaled": -0.5428986774947155,
       "skill_views_scaled_90": [
-        -0.8794041371701723,
-        -0.2714866988401231
+        -0.8794041371701726,
+        -0.2714866988401229
       ],
       "rank_baseline": 0.617560594060652,
       "rank_views": 0.525316113506131,
@@ -203,14 +239,17 @@
     "90": {
       "issues": 31,
       "forecasts": 806,
+      "excluded": 0,
       "error_baseline": 0.643311700386403,
       "error_views": 0.872073372191692,
       "skill_views": -0.3556000484180284,
       "skill_views_90": [
-        -0.608469826290744,
+        -0.6084698262907436,
         -0.14306957815305585
       ],
       "error_views_scaled": 0.9456501325346451,
+      "death_weighted_error_baseline": 0.8435151343931809,
+      "death_weighted_error_views": 1.0808984258765415,
       "skill_views_scaled": -0.4699719155840685,
       "skill_views_scaled_90": [
         -0.7740669668277975,
@@ -7493,5 +7532,5 @@
   },
   "acled_complete_through": "2026-09",
   "acled_sha256": "104a4cdd4e18307842d73ff5ddcc915592ee868b92c7b3bcb1513d00cb5091f4",
-  "code_hash": "4f1048e808ad"
+  "code_hash": "e97785a48885"
 }

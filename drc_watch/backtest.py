@@ -15,6 +15,7 @@ WINDOWS = (1, 3, 6, 12)   # Candidate baseline windows in months; one is chosen 
 GAP = 1                    # Months between the newest month the baseline uses and the issue month, minus one.
 SELECTION = ('2023-01', '2023-12')
 DRAWS = 1000
+SELECTION_VERSION = 4  # All selection outcomes must also finish inside the selection year.
 
 
 def baseline_rate(series, issue, window, gap=GAP):
@@ -69,9 +70,14 @@ def log_error(forecast, actual):
     return abs(math.log1p(forecast) - math.log1p(actual))
 
 
+def selection_rows(rows):
+    return [r for r in rows if SELECTION[0] <= r['issue'] <= SELECTION[1]
+            and shift(r['issue'], HORIZONS[r['horizon']] - 1) <= SELECTION[1]]
+
+
 def choose_window(rows):
     """The window with the lowest mean log error over the selection year, all horizons pooled."""
-    picked = [r for r in rows if SELECTION[0] <= r['issue'] <= SELECTION[1]]
+    picked = selection_rows(rows)
     errors = {}
     for w in WINDOWS:
         usable = [r for r in picked if r[f'base_{w}'] is not None]
@@ -102,6 +108,8 @@ def spearman(a, b):
 
 def block_interval(rows, model, reference, block, draws=DRAWS, seed=7):
     """Resample runs of `block` consecutive issues, keeping every province in an issue together."""
+    if draws < 1:
+        raise ValueError('Bootstrap draws must be positive.')
     issues = sorted({r['issue'] for r in rows})
     if len(issues) < 2 * block:
         return None  # Every resample would hold nearly the same issues: an interval that only looks certain.
@@ -131,6 +139,11 @@ def scores(rows, base_key, draws=DRAWS):
         views = float(np.mean([log_error(r['views'], r['actual']) for r in cases]))
         scaled = [r for r in cases if r.get('views_scaled') is not None]
         views_scaled = float(np.mean([log_error(r['views_scaled'], r['actual']) for r in scaled])) if len(scaled) == len(cases) else None
+        # Descriptive sensitivity: weight each province's mean error by its total deaths.
+        province_cases = [[r for r in cases if r['province'] == name] for name in sorted({r['province'] for r in cases})]
+        toll = sum(r['actual'] for r in cases)
+        weighted = {key: sum(sum(r['actual'] for r in group) * np.mean([log_error(r[key], r['actual']) for r in group])
+                             for group in province_cases) / toll if toll else None for key in ('baseline', 'views')}
         rho = {'baseline': [], 'views': []}
         for issue in sorted({r['issue'] for r in cases}):
             group = [r for r in cases if r['issue'] == issue]
@@ -140,10 +153,12 @@ def scores(rows, base_key, draws=DRAWS):
                     rho[key].append(value)
         result[str(days)] = {
             'issues': len({r['issue'] for r in cases}), 'forecasts': len(cases),
+            'excluded': sum(r['horizon'] == days for r in rows) - len(cases),
             'error_baseline': base, 'error_views': views,
             'skill_views': 1 - views / base if base > 0 else None,
             'skill_views_90': block_interval(cases, 'views', 'baseline', max(3, months), draws),
             'error_views_scaled': views_scaled,
+            'death_weighted_error_baseline': weighted['baseline'], 'death_weighted_error_views': weighted['views'],
             'skill_views_scaled': None if views_scaled is None or base <= 0 else 1 - views_scaled / base,
             'skill_views_scaled_90': None if views_scaled is None else block_interval(cases, 'views_scaled', 'baseline', max(3, months), draws),
             'rank_baseline': float(np.mean(rho['baseline'])) if rho['baseline'] else None,
@@ -157,7 +172,7 @@ def scores(rows, base_key, draws=DRAWS):
 
 def views_scale(rows):
     """One factor putting VIEWS on ACLED's level, fitted on the selection year at 30 days only."""
-    picked = [r for r in rows if SELECTION[0] <= r['issue'] <= SELECTION[1] and r['horizon'] == 30 and r['views'] is not None]
+    picked = [r for r in selection_rows(rows) if r['horizon'] == 30 and r['views'] is not None]
     predicted = sum(r['views'] for r in picked)
     if not picked or predicted <= 0:
         return None

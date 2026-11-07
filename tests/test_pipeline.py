@@ -291,7 +291,8 @@ class EndToEnd(Sandbox):
         pipeline.run_forecast()
         self.assertEqual(pipeline.run_score()['horizons']['30']['status'], 'pending')
         self.write_inputs(complete='2026-11')
-        scored = pipeline.run_score()['horizons']
+        with mock.patch.object(x, 'now', return_value=datetime(2026, 12, 15, tzinfo=timezone.utc)):
+            scored = pipeline.run_score()['horizons']
         self.assertEqual(scored['30']['status'], 'scored')
         self.assertEqual(scored['60']['status'], 'pending')
         self.assertAlmostEqual(scored['30']['error_baseline'], 0)

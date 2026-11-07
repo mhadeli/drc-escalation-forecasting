@@ -503,5 +503,6 @@
       "views_90": 0.8,
       "views_scaled_90": 1.0
     }
-  ]
+  ],
+  "evaluation_kind": "retrospective"
 }

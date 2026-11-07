@@ -19,7 +19,12 @@ REPORTING_LAG_DAYS = 14  # A month counts as complete only this long after it en
 
 
 def number(text):
-    return int((text or '0').replace(',', ''))
+    if text is None or not text.strip():
+        raise ValueError('Missing counts must not be interpreted as zero.')
+    value = int(text.replace(',', ''))
+    if value < 0:
+        raise ValueError('Counts cannot be negative.')
+    return value
 
 
 def month_key(day):
@@ -47,12 +52,17 @@ def read_weekly(path):
         rows = [r for r in reader if r['country'] == COUNTRY]
     if not rows:
         raise ValueError(f'No rows for {COUNTRY}.')
+    seen = set()
     for row in rows:
         week = date.fromisoformat(row['week'])
         if week.weekday() != 5:
             raise ValueError(f'ACLED weeks start on Saturday; {week} does not.')
         if row['admin1'] not in PROVINCES:
             raise ValueError(f"Unknown DRC province: {row['admin1']}")
+        key = tuple(row.get(k) for k in ('week', 'admin1', 'event_type', 'sub_event_type'))
+        if key in seen:
+            raise ValueError(f'Duplicate province/week/event-type row: {key}')
+        seen.add(key)
         row['week'], row['fatalities'], row['events'] = week, number(row['fatalities']), number(row['events'])
     return rows
 
@@ -67,9 +77,9 @@ def weekly_totals(rows, definition=PRIMARY):
     return dict(totals)
 
 
-def coverage(rows):
+def coverage(rows, as_of=None):
     first, last = min(r['week'] for r in rows), max(r['week'] for r in rows)
-    end = last + timedelta(days=6)
+    end = min(last + timedelta(days=6), as_of or date.today())
     complete = month_key(end - timedelta(days=REPORTING_LAG_DAYS))
     if month_end(complete) > end - timedelta(days=REPORTING_LAG_DAYS):
         complete = shift(complete, -1)

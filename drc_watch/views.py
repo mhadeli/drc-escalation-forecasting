@@ -46,7 +46,7 @@ def fetch_catalog():
 def catalog():
     path = OUT / 'catalog.json'
     if not path.exists():
-        raise ValueError('No VIEWS catalog. Run pipeline.py fetch first.')
+        raise ValueError('No VIEWS catalog. Run pipeline.py ingest first.')
     return json.loads(path.read_text())['runs']
 
 

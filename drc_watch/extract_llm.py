@@ -4,6 +4,7 @@ Results are cached by post, model and prompt version, so re-runs do not pay twic
 changing the prompt starts a fresh cache. Install requirements-llm.txt to use this.
 """
 
+import hashlib
 import json
 import re
 import time
@@ -131,7 +132,9 @@ def _call_claude(client, post, model):
 
 
 def extract_one(client, post, model):
-    path = CACHE / model / PROMPT_VERSION / f"{post['id']}.json"
+    identity = json.dumps([SYSTEM, PostExtraction.model_json_schema(), post['id'], post['created_at'], post['text']], sort_keys=True)
+    digest = hashlib.sha256(identity.encode()).hexdigest()
+    path = CACHE / model / PROMPT_VERSION / f'{digest}.json'
     if path.exists():
         return json.loads(path.read_text())
     started = time.time()
@@ -147,11 +150,12 @@ def to_tagged(post, record):
     row = fc.classify(post)
     found = record.get('extraction')
     if found is None:
-        row.update(on_topic=False, historical=False, hotspots=[], actors=[], extraction_error=record.get('error'))
+        row.update(on_topic=False, historical=False, hotspots=[], provinces=[], actors=[], extraction_error=record.get('error'))
         row.update({signal: False for signal in fc.SIGNALS})
         return row
     types = set(found['event_types'])
     row.update(on_topic=found['relevant'], historical=found['historical'], hotspots=found['hotspots'], actors=found['actors'],
+               provinces=sorted({fc.HOTSPOTS[name][0] for name in found['hotspots']}),
                event=bool(types), control_change='control_change' in types, escalation=found['escalation'],
                deescalation=found['deescalation'], fatalities=found['fatalities'], displaced=found['displaced'],
                other_places=found['other_places'], source_type=found['source_type'])

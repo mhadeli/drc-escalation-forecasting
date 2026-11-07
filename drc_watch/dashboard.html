@@ -64,6 +64,9 @@ select { font: inherit; padding: 4px 8px; background: var(--surface); color: var
 .state { font-size: 12px; font-weight: 600; color: var(--text-2); }
 .formula { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; background: var(--page); border: 1px solid var(--grid); border-radius: 6px; padding: 8px 12px; margin: 6px 0 10px; overflow-x: auto; white-space: pre-wrap; }
 .notice { border-left: 3px solid var(--text-3); padding: 8px 14px; background: var(--surface); margin: 12px 0; font-size: 14px; }
+.share { display: flex; height: 38px; border-radius: 8px; overflow: hidden; color: #fff; font-size: 12px; font-weight: 620; margin: 8px 0 4px; }
+.share div { display: flex; align-items: center; justify-content: center; min-width: 0; overflow: hidden; white-space: nowrap; padding: 0 4px; }
+.term h3 { margin-top: 0; }
 .takeaways li { margin: 6px 0; max-width: 80ch; }
 details { margin: 10px 0; }
 summary { cursor: pointer; color: var(--text-2); font-weight: 600; }
@@ -193,50 +196,102 @@ function lineChart(id, rows, keys, opts = {}) {
 }
 
 /* Header */
-document.getElementById('lead').textContent = 'Forecasts of conflict deaths in each of the 26 provinces of the Democratic Republic of the Congo over the next 30, 60 and 90 days. ' +
-  'A baseline built only from ACLED’s recent history is tested against VIEWS, the leading published forecast. X posts are checked against what ACLED recorded in the same week, then used to adjust one live forecast.';
+document.getElementById('lead').textContent = 'Conflict deaths in each of the 26 provinces of the Democratic Republic of the Congo, at 30, 60 and 90 days. ' +
+  `The simple forecast averages ${BT ? BT.window : 'the chosen number of'} complete months of ACLED deaths per province. It is compared with dated VIEWS forecasts. Horizons cover one, two and three calendar months; 30/60/90 are approximate labels. The November example was reconstructed after its target period began and is not a prospective test.`;
 
 /* 1. Overview */
 function verdict() {
   if (!BT) return null;
   const s = H.map(h => BT.evaluation.scores[h]).filter(Boolean);
-  if (s.every(v => v.skill_views_90 && v.skill_views_90[1] < 0)) return 'baseline';
-  if (s.every(v => v.skill_views_90 && v.skill_views_90[0] > 0)) return 'views';
+  if (s.length === 3 && s.every(v => v.skill_views_90 && v.skill_views_90[1] < 0)) return 'baseline';
+  if (s.length === 3 && s.every(v => v.skill_views_90 && v.skill_views_90[0] > 0)) return 'views';
   return 'mixed';
+}
+function viewsBetter(names) {
+  return names.filter(name => BT.provinces[name] && BT.provinces[name].error_views < BT.provinces[name].error_baseline);
 }
 function renderOverview() {
   const root = document.getElementById('overview');
   root.replaceChildren();
   const s30 = BT && BT.evaluation.scores['30'];
-  const v = verdict();
   const rho = XC ? XC.rank_event_authors_vs_state_deaths : null;
+  const kin = XC && XC.rows.find(r => r.province === 'Kinshasa');
+  const heavy = BT ? Object.entries(BT.provinces).filter(([, p]) => p.actual >= 150).map(([name]) => name) : [];
+  const better = BT ? viewsBetter(heavy) : [];
   root.append(el('div', { class: 'tiles' },
-    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Does ACLED history alone beat VIEWS?'),
-      el('div', { class: 'value' }, !BT ? 'Not run yet' : v === 'baseline' ? 'Yes, at 30, 60 and 90 days' : v === 'views' ? 'No, VIEWS is better' : 'Mixed across horizons'),
-      el('div', { class: 'note' }, s30 ? `VIEWS’s error is ${worse(s30.skill_views)} than the baseline’s at 30 days, with a 90% interval of ${band(s30.skill_views_90)}. That covers ${s30.issues} monthly forecasts from ${monthName(BT.evaluation.first_issue)}, each for all 26 provinces.` : 'Needs the backtest.')),
-    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Does X track where people are dying?'),
-      el('div', { class: 'value' }, rho === null ? 'Not run yet' : rho >= .6 ? 'Broadly, in six provinces' : rho >= .3 ? 'Weakly' : 'No'),
-      el('div', { class: 'note' }, XC ? `The rank correlation is ${num(rho)} between X authors reporting violence and ACLED deaths in the same week, ${dayName(XC.week_start)} to ${dayName(XC.week_end)}. Six provinces are too few to prove anything.` : 'Needs the X counts.')),
-    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Live forecast'),
-      el('div', { class: 'value' }, FC ? `Issued ${dayName(FC.issued)}` : 'Not issued'),
-      el('div', { class: 'note' }, FC ? `The baseline, baseline + X and VIEWS each forecast November to January. The 30-day result is ready about ${dayName(FC.resolves['30'])}.` : 'Needs the backtest.'))));
-  if (BT) {
+    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Does the simple forecast match the toll?'),
+      el('div', { class: 'value' }, !s30 ? 'Not run yet' : `${deaths(s30.total_baseline)} vs ${deaths(s30.total_actual)}`),
+      el('div', { class: 'note' }, s30 ? `Sum of the 30-day forecasts and of recorded deaths, ${monthName(BT.evaluation.first_issue)} to ${monthName(BT.evaluation.last_issue)}, all 26 provinces. VIEWS sums to ${deaths(s30.total_views)}, ${Math.round(100 * s30.total_views / s30.total_actual)}% of the ACLED total, on a different death definition.` : 'Needs the backtest.')),
+    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Does it match where deaths fall?'),
+      el('div', { class: 'value' }, !s30 ? 'Not run yet' : `Rank ${num(s30.rank_baseline)} vs ${num(s30.rank_views)}`),
+      el('div', { class: 'note' }, s30 ? `Average Spearman correlation across provinces, baseline against VIEWS. 1 would rank the 26 provinces perfectly. ${better.length ? `VIEWS has the lower log error in ${better.join(' and ')}.` : ''}` : 'Needs the backtest.')),
+    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Equal-weighted log error'),
+      el('div', { class: 'value' }, !s30 ? 'Not run yet' : `VIEWS ${worse(s30.skill_views)}`),
+      el('div', { class: 'note' }, s30 ? `At one month, 90% interval ${band(s30.skill_views_90)}. VIEWS is worse in Nord-Kivu and Sud-Kivu but better in Ituri (1,235 recorded deaths) and Mai-Ndombe (193). Every province-month counts equally; weighting province mean errors by their death toll narrows the relative gap to ${s30.death_weighted_error_baseline ? Math.round(100 * (s30.death_weighted_error_views / s30.death_weighted_error_baseline - 1)) : "about 31"}%. The longer horizons reuse these months.` : 'Needs the backtest.')),
+    el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Does X help the forecast?'),
+      el('div', { class: 'value' }, !XC ? 'Not run yet' : 'Not tested yet'),
+      el('div', { class: 'note' }, XC ? `Same-week rank correlation ${num(rho)} on six provinces is attention, not a forecast.${kin ? ` ${kin.province} had ${kin.event_authors} authors and ${kin.deaths_state} recorded deaths.` : ''} The first example window can be scored about ${FC ? dayName(FC.resolves['30']) : 'mid-December 2026'}.` : 'Needs the X counts.'))));
+  if (BT && s30) {
+    root.append(el('h2', {}, 'The toll, summed over the scored months'),
+      el('p', { class: 'muted' }, 'One bar is every province and every 30-day issue added together. Compare how closely the simple forecast matches the recorded total. VIEWS is lower because it predicts UCDP state-based deaths, while the bar it is scored against is ACLED battles plus explosions and remote violence. The dashed series on the chart below lifts VIEWS by the 2023 scale factor; the month-to-month misses remain, and the log score gets worse, not better.'),
+      el('div', { class: 'card scroll', id: 'tollChart' }));
+    document.getElementById('tollChart').append(hBars('tollChart', [
+      { label: 'ACLED recorded', value: s30.total_actual, color: 'var(--actual)' },
+      { label: 'Simple forecast', value: s30.total_baseline, color: 'var(--baseline)' },
+      { label: 'VIEWS', value: s30.total_views, color: 'var(--views)' },
+      { label: 'VIEWS rescaled', value: s30.total_views * BT.views_scale, color: 'var(--views)', dash: true },
+    ], { label: 'Summed 30-day deaths: recorded, simple forecast, VIEWS and rescaled VIEWS' }));
     const rows = BT.national.filter(r => r.month >= BT.evaluation.first_issue);
-    root.append(el('h2', {}, 'Monthly conflict deaths in the DRC, against each 30-day forecast'),
-      el('p', { class: 'muted' }, `Deaths from ACLED battles and explosions or remote violence, the closest match to VIEWS’s state-based deaths. Each forecast was made on the first of the month using only data available then. ${monthName(rows[0].month)} to ${monthName(rows[rows.length - 1].month)}.`),
-      legend(['actual', 'baseline', 'views']), el('div', { class: 'card scroll', id: 'natChart' }));
-    document.getElementById('natChart').append(lineChart('natChart', rows, ['actual', 'baseline', 'views'], { label: 'Monthly DRC deaths: recorded, baseline and VIEWS' }));
+    root.append(el('h2', {}, 'The same comparison, month by month'),
+      el('p', { class: 'muted' }, `National total of the primary ACLED series. Each point is a retrospective reconstruction using the stated information cutoff and a revised ACLED snapshot. ${monthName(rows[0].month)} to ${monthName(rows[rows.length - 1].month)}.`),
+      legend(['actual', 'baseline', 'views', 'views_scaled']), el('div', { class: 'card scroll', id: 'natChart' }));
+    document.getElementById('natChart').append(lineChart('natChart', rows, ['actual', 'baseline', 'views', 'views_scaled'], { label: 'Monthly DRC deaths: recorded, simple forecast and VIEWS' }));
+    root.append(shareStrip());
   }
   if (BT && XC) {
-    const s = BT.evaluation.scores, kin = XC.rows.find(r => r.province === 'Kinshasa');
     root.append(el('h2', {}, 'What this shows'), el('ul', { class: 'takeaways' }, [
-      `Last month’s deaths, carried forward, are hard to beat. Conflict in the DRC is persistent and concentrated in the east, so recent history ranks provinces well, with a rank correlation of ${num(s['30'].rank_baseline)} against ${num(s['30'].rank_views)} for VIEWS.`,
-      `VIEWS predicts fewer deaths than ACLED records, ${Math.round(100 * s['30'].total_views / s['30'].total_actual)}% of the total, and spreads small risks across quiet provinces. Rescaling it to ACLED’s level does not close the gap, so the difference is about where deaths fall, not only how many.`,
-      'The comparison is not perfectly fair to VIEWS. It predicts UCDP state-based deaths, while the outcome here is ACLED’s count, which codes events differently.',
-      `X agrees with ACLED about where violence is, but its counts also reflect attention. ${kin ? `Kinshasa had ${kin.event_authors} authors posting about violence and ${kin.deaths_state} recorded deaths that week.` : ''}`,
-      'Whether X improves the forecast is still open. That needs outcomes after 1 November 2026, and one issue date will not settle it.',
+      `The frozen baseline carries forward the most recent available month. Original selection was a near tie: log error 0.579 for one month versus 0.580 for three. The stricter boundary check is a separate sensitivity, not a replacement.`,
+      'Matching the national toll is a different result from the log score. The log score gives a quiet province the same weight as Nord-Kivu, and predicting zero there is free points for a persistence forecast.',
+      'Rescaling VIEWS so that its 2023 total matches ACLED does not remove the log-error gap. The comparison is also not the same target: VIEWS is UCDP state-based deaths.',
+      'X is a same-week check on six provinces the search was aimed at. The X adjustment multiplies the baseline, so a province at zero stays at zero. One issue cannot show whether X helps.',
     ].map(t => el('li', {}, t))));
   }
+}
+function hBars(id, items, opts = {}) {
+  const w = width(id), rowH = 34, left = 148, right = 78, top = 8;
+  const max = niceMax(Math.max(...items.map(i => i.value)));
+  const height = top + items.length * rowH + 6;
+  const x = v => left + v / max * (w - left - right);
+  const svg = svgEl('svg', { width: w, height, role: 'img', 'aria-label': opts.label || 'Bar chart' });
+  for (let t = 0; t <= 4; t++) {
+    const v = max * t / 4;
+    svg.append(svgEl('line', { x1: x(v), x2: x(v), y1: top, y2: height - 4, stroke: 'var(--grid)' }));
+    svg.append(svgEl('text', { x: x(v), y: top + 11, 'text-anchor': 'middle' }, Math.round(v).toLocaleString('en')));
+  }
+  items.forEach((item, i) => {
+    const y = top + 16 + i * rowH;
+    svg.append(svgEl('text', { x: left - 10, y: y + 5, 'text-anchor': 'end' }, item.label));
+    svg.append(svgEl('rect', { x: left, y: y - 9, width: Math.max(x(item.value) - left, 0), height: 18, rx: 4, fill: item.dash ? 'none' : item.color, stroke: item.color, 'stroke-width': item.dash ? 2 : 0, 'stroke-dasharray': item.dash ? '4 3' : 'none' }));
+    svg.append(svgEl('text', { x: x(item.value) + 8, y: y + 4, style: 'fill:var(--text)' }, Math.round(item.value).toLocaleString('en')));
+  });
+  return svg;
+}
+function shareStrip() {
+  const entries = Object.entries(BT.provinces).sort((a, b) => b[1].actual - a[1].actual);
+  const total = entries.reduce((sum, [, p]) => sum + p.actual, 0) || 1;
+  const named = entries.filter(([, p]) => p.actual / total >= 0.03);
+  const rest = total - named.reduce((sum, [, p]) => sum + p.actual, 0);
+  const parts = [...named.map(([name, p]) => [name, p.actual]), ...(rest > 1 ? [['All other provinces', rest]] : [])];
+  const colors = ['#184f95', '#1baf7a', '#eb6834', '#2a78d6', '#6f6e69', '#8a8984'];
+  const topShare = Math.round(100 * named.reduce((sum, [, p]) => sum + p.actual, 0) / total);
+  return el('div', {},
+    el('h2', {}, 'Where the recorded deaths are'),
+    el('p', { class: 'muted' }, `${named.map(([name]) => name).join(', ')} account for ${topShare}% of deaths in the scored months. The log score still treats the other provinces as equal cases.`),
+    el('div', { class: 'share', role: 'img', 'aria-label': 'Share of recorded deaths by province' }, parts.map(([name, value], i) => {
+      const pct = 100 * value / total;
+      return el('div', { style: `width:${pct}%;background:${colors[i]}`, title: `${name}: ${deaths(value)} (${Math.round(pct)}%)` }, pct >= 8 ? `${name} ${Math.round(pct)}%` : '');
+    })),
+    el('div', { class: 'legend' }, parts.map(([name, value], i) => el('span', {}, el('i', { class: 'sw', style: `background:${colors[i]}` }), `${name} ${Math.round(100 * value / total)}%`))));
 }
 
 /* 2. Backtest */
@@ -296,27 +351,42 @@ function provinceChart(id) {
 }
 function provinceNote() {
   const all = Object.entries(BT.provinces);
+  const total = all.reduce((sum, [, p]) => sum + p.actual, 0) || 1;
   const quiet = all.filter(([, p]) => p.actual < 5 && p.error_views > p.error_baseline).length;
-  const busy = all.sort((a, b) => b[1].actual - a[1].actual).slice(0, 5);
+  const busy = [...all].sort((a, b) => b[1].actual - a[1].actual).slice(0, 5);
+  const share = Math.round(100 * busy.reduce((sum, [, p]) => sum + p.actual, 0) / total);
   const worst = busy.reduce((a, b) => (b[1].error_views - b[1].error_baseline > a[1].error_views - a[1].error_baseline ? b : a));
   const better = busy.filter(([, p]) => p.error_views < p.error_baseline).map(([n]) => n);
-  return `Typical error per province, sorted by recorded deaths. In ${quiet} provinces with almost no recorded deaths, VIEWS still expects a few and the baseline does better. ` +
-    `Among the five deadliest provinces, the gap is largest in ${worst[0]}` + (better.length ? `, and VIEWS does better in ${better.join(' and ')}.` : '.');
+  return `The five deadliest provinces account for ${share}% of recorded deaths. In ${quiet} provinces with almost no recorded deaths, VIEWS still expects a few and the simple forecast does better on the log score. ` +
+    `Among those five, the gap is largest in ${worst[0]}` + (better.length ? `, and VIEWS does better in ${better.join(' and ')}.` : '.');
+}
+function xShiftNote(h) {
+  const rows = FC.rows.filter(r => r[`x_${h}`] !== null);
+  const zeros = rows.filter(r => r[`baseline_${h}`] === 0);
+  const shifted = rows.filter(r => r[`baseline_${h}`] > 0).map(r => ({ name: r.province, pct: (r[`x_${h}`] - r[`baseline_${h}`]) / r[`baseline_${h}`] }));
+  const big = shifted.filter(s => Math.abs(s.pct) >= 0.1);
+  const small = shifted.filter(s => Math.abs(s.pct) < 0.1);
+  const parts = [];
+  if (zeros.length) parts.push(`${zeros.map(r => `${r.province} (${r.x_event_authors} authors)`).join(', ')} ${zeros.length === 1 ? 'stays' : 'stay'} at zero, because X multiplies the baseline.`);
+  if (small.length) parts.push(`${small.map(s => s.name).join(' and ')} ${small.length === 1 ? 'moves' : 'move'} by less than 10%.`);
+  if (big.length) parts.push(big.map(s => `${s.name} ${s.pct > 0 ? '+' : '−'}${Math.round(Math.abs(s.pct) * 100)}%`).join(', ') + '.');
+  parts.push('A dot in the table means that province has no X data, so the forecast stays the baseline.');
+  return parts.join(' ');
 }
 function renderBacktest() {
   const root = document.getElementById('backtest');
   root.replaceChildren();
   if (!BT) return empty(root, 'The backtest has not run. It needs the ingested ACLED and VIEWS aggregates.');
   const sc = BT.evaluation.scores;
-  root.append(el('p', { class: 'muted' }, `Each month from ${monthName(BT.evaluation.first_issue)} to ${monthName(BT.evaluation.last_issue)} is replayed as if it were the first of that month. Both forecasts are made for all 26 provinces, then checked against what ACLED recorded. The baseline carries forward the province’s deaths in the most recent month that ACLED had finished coding.`));
+  root.append(el('p', { class: 'muted' }, `Each month from ${monthName(BT.evaluation.first_issue)} to ${monthName(BT.evaluation.last_issue)} is replayed as if it were the first of that month. Both forecasts are made for all 26 provinces, then checked against what ACLED recorded. The simple forecast carries forward the province’s deaths in the most recent month that ACLED had finished coding.`));
   root.append(el('h2', {}, 'Scoreboard'),
-    el('p', { class: 'muted' }, 'Typical error is how many times too high or too low a forecast usually is: ×1.5 means off by about half. It is computed on log deaths so that a large province does not drown out the others. Rank correlation measures whether a forecast puts provinces in the right order, where 1 is perfect.'),
+    el('p', { class: 'muted' }, 'Typical error is the equal-weighted log score, written as a multiple: ×1.5 means usually off by about half. A quiet province counts as much as Nord-Kivu, which is why predicting zero in a quiet province helps this table. Rank correlation is the separate question of whether the forecast orders provinces the way the deaths did. The 60- and 90-day rows include the 30-day month, so they are one check seen three ways.'),
     table(['Horizon', 'Typical error: baseline', 'VIEWS', 'VIEWS error vs baseline', '90% interval', 'Rescaled VIEWS', 'Rank: baseline', 'VIEWS'],
       H.filter(h => sc[h]).map(h => [`${h} days`, factor(sc[h].error_baseline), factor(sc[h].error_views), worse(sc[h].skill_views), band(sc[h].skill_views_90),
         worse(sc[h].skill_views_scaled), num(sc[h].rank_baseline), num(sc[h].rank_views)])),
     el('p', { class: 'small' }, `Each row covers ${sc['30'].issues} monthly issues × 26 provinces.`));
-  root.append(el('h2', {}, 'How much worse is VIEWS than the baseline?'),
-    el('p', { class: 'muted' }, `Dots left of the baseline line mean VIEWS made larger errors. Bars are 90% intervals from resampling blocks of consecutive months. The hollow dots multiply VIEWS by ${num(BT.views_scale)}, a factor fitted on 2023 so that its total matches ACLED’s.`),
+  root.append(el('h2', {}, 'Equal-weighted log error, VIEWS against the simple forecast'),
+    el('p', { class: 'muted' }, `Dots left of the line mean VIEWS’s log error is larger. Bars are 90% intervals from resampling blocks of consecutive months. The hollow dots multiply every VIEWS forecast by ${num(BT.views_scale)}, fitted on 2023 so the totals match. That lift does not move the dots onto the line.`),
     el('div', { class: 'card scroll', id: 'skillChart' }));
   document.getElementById('skillChart').append(skillChart('skillChart'));
   root.append(el('h2', {}, 'By province, 30 days'), el('p', { class: 'muted' }, provinceNote()),
@@ -333,8 +403,12 @@ function renderBacktest() {
   };
   pick.addEventListener('change', draw);
   draw();
+  const windowErrors = Object.entries(BT.selection.errors).sort((a, b) => a[1] - b[1]);
+  const windowTie = windowErrors.length > 1 && windowErrors[1][1] - windowErrors[0][1] < 0.01
+    ? ` The ${windowErrors[1][0]}-month window was essentially tied with it: log error ${windowErrors[0][1].toFixed(3)} against ${windowErrors[1][1].toFixed(3)}. The frozen choice uses the selected averaging window.`
+    : '';
   root.append(el('h2', {}, 'How the baseline was chosen'),
-    el('p', { class: 'muted' }, `Four windows were tried on 2023 only, and the one with the lowest error was frozen before 2024 was scored. The ${BT.window}-month window won. 2023 is shown separately below and is not part of the scoreboard.`),
+    el('p', { class: 'muted' }, `Four windows were compared on the original 2023 issue dates. The ${BT.window}-month reference stays frozen.${windowTie} Some late-2023 issues used early-2024 outcomes at longer horizons, so this is exploratory. Restricting outcome months to 2023 chooses ${BT.selection_sensitivity ? BT.selection_sensitivity.window : "a separate"} months; that check does not replace the reference.`),
     table(['Window', 'Typical error in 2023'], Object.entries(BT.selection.errors).map(([w, e]) => [`${w} month${w === '1' ? '' : 's'}${Number(w) === BT.window ? ', chosen' : ''}`, factor(e)])));
   const sens = BT.sensitivity_no_gap, sel = BT.selection_year_scores;
   root.append(el('details', {}, el('summary', {}, 'Sensitivity checks'),
@@ -361,7 +435,8 @@ function scatter(id) {
   svg.append(svgEl('text', { x: 12, y: top + (h - top - bottom) / 2, transform: `rotate(-90 12 ${top + (h - top - bottom) / 2})`, 'text-anchor': 'middle' }, 'ACLED deaths that week'));
   [...rows].sort((a, b) => b.event_authors - a.event_authors).forEach(r => {
     const cx = x(r.event_authors), cy = y(r.deaths_state);
-    svg.append(svgEl('circle', { cx, cy, r: 6, fill: 'var(--x)', stroke: 'var(--surface)', 'stroke-width': 2 }));
+    const quiet = r.deaths_state === 0 && r.event_authors > 0;
+    svg.append(svgEl('circle', { cx, cy, r: 6, fill: quiet ? 'var(--views)' : 'var(--x)', stroke: 'var(--surface)', 'stroke-width': 2 }));
     const dy = [0, -15, 15, -30, 30].find(d => !placed.some(([px, py]) => Math.abs(px - cx) < 90 && Math.abs(py - (cy + d)) < 13)) ?? 0;
     placed.push([cx, cy + dy]);
     svg.append(svgEl('text', { x: cx + 10, y: cy + 4 + dy, style: 'fill:var(--text)' }, r.province));
@@ -381,8 +456,10 @@ function renderX() {
     el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Rank correlation, authors posting about violence'), el('div', { class: 'value' }, num(XC.rank_event_authors_vs_state_deaths)), el('div', { class: 'note' }, 'Against deaths in battles and remote violence. 1 means X ranks the six provinces exactly as ACLED does.')),
     el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Including violence against civilians'), el('div', { class: 'value' }, num(XC.rank_event_authors_vs_organised_deaths)), el('div', { class: 'note' }, 'The same X counts against a wider death definition.')),
     el('div', { class: 'tile' }, el('div', { class: 'label' }, 'All authors naming the province'), el('div', { class: 'value' }, num(XC.rank_all_authors_vs_state_deaths)), el('div', { class: 'note' }, 'Without the violence filter, attention dilutes the signal.'))));
+  const quiet = XC.rows.filter(r => r.deaths_state === 0 && r.event_authors > 0).map(r => r.province);
   root.append(el('div', { class: 'card scroll', id: 'scatter' }));
   document.getElementById('scatter').append(scatter('scatter'));
+  root.append(el('p', { class: 'small' }, `Blue marks a province with both posts and deaths. Orange marks posts and no state-based deaths${quiet.length ? `: ${quiet.join(', ')}` : ''}. The vertical axis is the same week as the posts, so this chart does not show whether X leads violence.`));
   root.append(table(['Province', 'X authors posting about violence', 'All X authors', 'ACLED deaths: battles, remote violence', 'Including violence against civilians'],
     [...XC.rows].sort((a, b) => b.deaths_state - a.deaths_state).map(r => [r.province, r.event_authors, r.authors, r.deaths_state, r.deaths_organised])));
   root.append(el('h2', {}, 'Read with care'), el('ul', { class: 'takeaways' }, [
@@ -402,7 +479,7 @@ function renderForecast() {
   const root = document.getElementById('forecast');
   root.replaceChildren();
   if (!FC) return empty(root, 'No live forecast yet. It needs the backtest’s frozen baseline window.');
-  root.append(el('p', { class: 'muted' }, `Issued ${dayName(FC.issued)}. The baseline uses ACLED through ${monthName(FC.acled_through)}. X posts are from ${dayName(FC.x_posts[0])} to ${dayName(FC.x_posts[1])}. VIEWS run ${FC.views_run.run} was released ${dayName(FC.views_run.released)}. The forecast was saved on ${dayName(FC.written_at)} and is not changed afterwards.`));
+  root.append(el('p', { class: 'muted' }, `Issued ${dayName(FC.issued)}. This saved example uses its original ${FC.window_months}-month baseline through ${monthName(FC.acled_through)}; it uses the same retained primary reference as the backtest. X posts are from ${dayName(FC.x_posts[0])} to ${dayName(FC.x_posts[1])}. VIEWS run ${FC.views_run.run} was released ${dayName(FC.views_run.released)}. The forecast was saved on ${dayName(FC.written_at)} and is not changed afterwards. Evaluation type: ${FC.evaluation_kind || 'unverified'}. A reconstruction saved after the target starts is not a prospective forecast.`));
   const hSel = el('select', { 'aria-label': 'Horizon' }), mSel = el('select', { 'aria-label': 'Forecast shown on the map' });
   H.forEach(h => hSel.append(el('option', { value: h }, `${h} days: ${FC.months[h].map(monthName).join(' to ').replace(/ to .* to /, ' to ')}`)));
   [['baseline', 'Baseline: ACLED history'], ['x', 'Baseline + X'], ['views', 'VIEWS'], ['views_scaled', 'VIEWS rescaled']].forEach(([v, t]) => mSel.append(el('option', { value: v }, t)));
@@ -415,12 +492,14 @@ function renderForecast() {
     drawMap(h, m);
     const rows = [...FC.rows].sort((a, b) => b[`baseline_${h}`] - a[`baseline_${h}`] || b[`views_${h}`] - a[`views_${h}`]);
     lower.replaceChildren(
-      el('h2', {}, `Expected deaths by province, next ${h} days`), legend(['baseline', 'x', 'views'], 'dot'),
+      el('h2', {}, `Expected deaths by province, next ${h} days`),
+      el('p', { class: 'muted' }, 'Filled dots are the simple forecast and VIEWS. The blue ring is the simple forecast after the X multiplier. Where the ring sits on the green dot, X barely changed the number.'),
+      legend(['baseline', 'x', 'views'], 'dot'),
       el('div', { class: 'card scroll', id: 'dots' }),
       table(['Province', 'Baseline', 'Baseline + X', 'X multiplier', 'X authors', 'VIEWS', 'VIEWS rescaled'],
         rows.map(r => [r.province, deaths(r[`baseline_${h}`]), r[`x_${h}`] === null ? '·' : deaths(r[`x_${h}`]), r.x_multiplier === null ? '·' : `×${num(r.x_multiplier)}`,
           r.x_event_authors ?? '·', deaths(r[`views_${h}`]), deaths(r[`views_scaled_${h}`])])),
-      el('p', { class: 'small' }, 'A dot in the table means there are no X data for that province, so its forecast is the baseline alone. A multiplier changes nothing when the baseline is zero.'),
+      el('p', { class: 'small' }, xShiftNote(h)),
       el('h2', {}, 'When each horizon is scored'),
       table(['Horizon', 'Months covered', 'Ready about', 'Status'], H.map(k => {
         const s = LIVE && LIVE.horizons[k];
@@ -449,7 +528,10 @@ function dotPlot(id, rows, h) {
     const present = Object.values(vals).filter(v => v !== null);
     svg.append(svgEl('text', { x: left - 10, y: y + 4, 'text-anchor': 'end' }, r.province));
     svg.append(svgEl('line', { x1: x(Math.min(...present)), x2: x(Math.max(...present)), y1: y, y2: y, stroke: 'var(--border)', 'stroke-width': 2 }));
-    for (const k of ['baseline', 'views', 'x']) if (vals[k] !== null) svg.append(svgEl('circle', { cx: x(vals[k]), cy: y, r: 5.5, fill: SERIES[k].color, stroke: 'var(--surface)', 'stroke-width': 2 }));
+    for (const k of ['baseline', 'views', 'x']) if (vals[k] !== null) {
+      const ring = k === 'x';
+      svg.append(svgEl('circle', { cx: x(vals[k]), cy: y, r: ring ? 7 : 5.5, fill: ring ? 'var(--surface)' : SERIES[k].color, stroke: SERIES[k].color, 'stroke-width': 2 }));
+    }
     const hit = svgEl('rect', { x: 0, y: y - rowH / 2, width: w, height: rowH, fill: 'transparent' });
     hit.addEventListener('mousemove', e => showTip(e, r.province, Object.keys(vals).map(k => `${SERIES[k].label}: ${vals[k] === null ? 'no X data' : deaths(vals[k])}`)));
     hit.addEventListener('mouseleave', hideTip);
@@ -496,17 +578,17 @@ const STEPS = [
   { title: 'Align', sub: 'Places, months, deaths', stage: 'Inputs', text: 'All three sources are put on the same footing.', points: [
     'ACLED weeks start on Saturday. A week that crosses a month end is split by days, so 3 days in October send 3/7 of its deaths to October.',
     () => DATA.views ? `Each of the ${DATA.views.cells} VIEWS grid cells goes to the province containing its centre. ${DATA.views.border_cells} border cells whose centre falls just outside go to the nearest province.` : 'Each VIEWS grid cell goes to the province containing its centre.',
-    'Deaths means ACLED battles plus explosions and remote violence, the closest match to VIEWS’s state-based deaths.'] },
-  { title: 'Baseline', sub: 'ACLED history only', stage: 'Backtest', text: 'The number everything else has to beat. It uses no text at all.', points: [
-    () => BT ? `It carries forward the province’s deaths in ${BT.window === 1 ? 'the most recent month' : `the last ${BT.window} months`} that ACLED had finished coding, as a monthly average, then multiplies by the months in the horizon.` : 'It carries forward recent deaths.',
-    'On the first of a month, the month before is still being coded, so the baseline stops a month earlier. VIEWS has the same two-month gap in its inputs.'] },
+    'Deaths means ACLED battles plus explosions and remote violence. This is an event-type proxy, not verified state participation or the same outcome as VIEWS’s state-based deaths.'] },
+  { title: 'Baseline', sub: 'ACLED history only', stage: 'Backtest', text: 'The simple forecast. It uses no text and no VIEWS output.', points: [
+    () => BT ? `For each province it takes deaths in ${BT.window === 1 ? 'the most recent complete month' : `the last ${BT.window} complete months`}, as a monthly average, then multiplies by the number of months in the horizon.` : 'It carries forward recent deaths.',
+    'On the first of a month, the previous month is still being coded, so the window stops at the month before that. VIEWS is held to a run whose inputs are at least that old.'] },
   { title: 'Backtest', sub: 'Replay 2024 onward', stage: 'Backtest', text: 'Each past month is replayed as if it were today.', points: [
-    'The baseline window was chosen on 2023 and frozen, so 2024 onward is an honest test.',
+    'The original reference stays frozen. Late-2023 selection horizons included early-2024 outcomes; the stricter boundary check is separate and the comparison is exploratory.',
     'VIEWS is taken from the run that had been published by that date, never a later one.'] },
-  { title: 'X check', sub: 'Same week', stage: 'X check', text: 'X has no history, so its one week is compared with ACLED’s same week.', points: [
-    'If X authors posting about violence rank provinces the way ACLED deaths do, X carries information about where violence is.'] },
-  { title: 'Live forecast', sub: 'Baseline + X, VIEWS', stage: 'Forecast', text: 'One forecast, issued on 1 November 2026, saved before any outcome exists.', points: [
-    'X raises the baseline where X attention is high relative to expected deaths, and lowers it where attention is low. The effect fades over three weeks.'] },
+  { title: 'X check', sub: 'Same week', stage: 'X check', text: 'There is only one week of posts, so this checks the same week rather than a forecast.', points: [
+    'Authors posting about violence are ranked against ACLED deaths in that week. Six provinces, and a search aimed at the east, cannot show that X predicts the next month.'] },
+  { title: 'Forecast example', sub: 'Baseline × X', stage: 'Forecast', text: 'One reconstruction targeting November 2026, saved on November 7 after the target period began.', points: [
+    'X multiplies the baseline by how the province’s share of authors compares with its share of expected deaths. A baseline of zero stays zero: Kinshasa has 15 event authors and still predicts zero. The multipliers are about 0.58 in Ituri, 1.08 in Nord-Kivu and 1.03 in Sud-Kivu. Escalation, control-change and de-escalation tags are extracted but unused. The multiplier fades over three weeks.'] },
   { title: 'Score', sub: 'After ACLED codes', stage: 'Score', text: 'Each horizon is scored once ACLED has coded all its months, about two weeks after the last one ends.', points: [
     'One issue date cannot prove that X helps. It shows the full workflow running end to end.'] },
   { title: 'Publish', sub: 'This page', stage: null, text: 'GitHub Actions reruns steps 2 to 7 from committed aggregates and rebuilds this page.', points: [
@@ -580,45 +662,80 @@ function renderHow() {
         `VIEWS:     ${deaths(r.views_30)}   (rescaled ${deaths(r.views_scaled_30)})`));
     };
     pick.addEventListener('change', draw);
-    card.append(el('h3', {}, 'Worked example from the live forecast'), el('label', {}, 'Province ', pick), out);
+    card.append(el('h3', {}, 'Worked forecast example'), el('label', {}, 'Province ', pick), out);
     draw();
   }
   root.append(el('h2', {}, 'How a number is calculated'), card);
 }
 
 /* 6. Data and limits */
+function term(title, paragraphs) {
+  return el('div', { class: 'card term' }, el('h3', {}, title), ...paragraphs.map(text => el('p', {}, text)));
+}
 function renderData() {
   const root = document.getElementById('data');
   root.replaceChildren();
+  const windowText = BT ? `The window is ${BT.window} month${BT.window === 1 ? '' : 's'}, chosen on the original 2023 issue dates.` : 'The window is chosen on the original 2023 issue dates.';
+  const scaleText = BT ? ` That factor is ${num(BT.views_scale)}.` : '';
+  const acledSpan = DATA.acled ? ` The file used here runs from ${dayName(DATA.acled.first_week)} to ${dayName(DATA.acled.coverage_end)}, and months count as finished through ${monthName(DATA.acled.complete_through)}.` : '';
+  const xSpan = DATA.x ? ` This page uses ${DATA.x.posts.toLocaleString('en')} posts by ${DATA.x.authors.toLocaleString('en')} authors, ${dayName(DATA.x.first_post)} to ${dayName(DATA.x.last_post)}, read with ${DATA.x.extractor}.` : '';
+  root.append(el('h2', {}, 'What the terms mean'),
+    el('p', { class: 'muted' }, 'Each number on this page is one of the calculations below. The formulas are also on How it works.'));
+  root.append(term('Simple forecast (baseline)', [
+    `For an issue dated the first of month M, take one province and average its ACLED deaths over the last w finished months, ending at M−2. ${windowText} The month M−1 is left out because ACLED is still coding it on the issue date.`,
+    'The 30-day forecast is that monthly rate. The 60-day forecast is the rate times two, and the 90-day forecast is the rate times three. There is no trend, no text, and no coefficient fitted on the years being scored.',
+    `The chosen window is ${BT ? BT.window : 'not yet available'} months. The original one- and three-month scores were nearly tied (0.579 versus 0.580). The one-month reference is retained; the stricter selection-boundary check is reported separately.`,
+  ]));
+  root.append(term('ACLED, the outcome and the history', [
+    `ACLED’s weekly aggregated export for the Democratic Republic of the Congo. Weeks start on Saturday. The primary death count is fatalities in Battles plus Explosions/Remote violence, summed to a province. A second series adds Violence against civilians and is shown only in the X check.${acledSpan}`,
+    'A week that crosses a month end is split by days: three of its seven days in October contribute three sevenths of its deaths to October. Republic of Congo rows in the same download are dropped by country.',
+    'A month is complete only when the file continues at least 14 days past its last day. An unfinished month is missing. It is never filled in as zero.',
+  ]));
+  root.append(term('VIEWS, the published forecast', [
+    'The Violence & Impacts Early-Warning System, from Uppsala University and PRIO. It predicts UCDP state-based fatalities for each PRIO-GRID cell of about 0.5°, by month. That is a different coding of political violence from ACLED, which is why the national totals are not expected to match even when both are careful.',
+    `For each issue date the page uses the newest VIEWS run that had already been released, and whose last input month is at least two months earlier. Each grid cell is given to the province that contains its centre. A centre that falls just outside the boundary goes to the nearest province.${DATA.views ? ` That assigns ${DATA.views.cells.toLocaleString('en')} cells, ${DATA.views.border_cells} of them by the nearest-province rule.` : ''} The province forecast is those cells, summed over the months in the horizon.`,
+    `Rescaled VIEWS multiplies every such sum by one number: ACLED’s 2023 total divided by VIEWS’s 2023 total at 30 days.${scaleText} It asks whether the gap is only a difference in level. It was fit on 2023 and then frozen.`,
+  ]));
+  root.append(term('X, the posts', [
+    `One saved search of public posts, in French and English. The query named places in the east, so posts about the Kivus and Ituri are partly there by design.${xSpan} Rules mark whether a post is about the DRC, whether it is about an old event, and whether it reports violence. Each author counts once per province. Copies of the same text count once. No post text is published.`,
+    'The X check compares those author counts with ACLED deaths in the same week. It is a same-week association. It is not a test of whether posts predict a later month.',
+    'The live adjustment compares each province’s share of authors who posted about violence with its share of baseline deaths, after adding one to every count. The ratio is square-rooted and limited to 0.5–2, then faded with a 21-day time constant, and multiplied by the baseline. A baseline of zero stays zero, however many authors posted. Kinshasa has 15 event authors but still predicts zero. Escalation, control-change and de-escalation tags do not enter this formula, so it cannot detect a new outbreak in a province with a zero baseline.',
+  ]));
+  root.append(term('The score', [
+    'Log error is the average of |ln(1 + forecast) − ln(1 + actual)| over province-months. “VIEWS is 39% higher” means this average is 39% larger. It does not mean VIEWS missed 39% of the deaths. Because each province-month weighs the same, a quiet province where the simple forecast is already zero pulls the average down.',
+    'Rank correlation is the average, over issue months, of the Spearman correlation between the 26 forecasts and the 26 recorded totals. It asks whether the forecast orders provinces correctly.',
+    'The toll is the plain sum of deaths. For the 30-day horizon each issue is one month, so the sum does not count the same month twice. The 60- and 90-day scores include those months again.',
+  ]));
+  root.append(el('h2', {}, 'Sources'), table(['Source', 'What was calculated from it', 'Published here'], [
+    [el('a', { href: 'https://acleddata.com', rel: 'noopener' }, 'ACLED'), 'Province-month deaths, used both as history for the simple forecast and as the outcome it is scored against.', 'Monthly totals, and one recent week of totals. No event row.'],
+    [el('a', { href: 'https://viewsforecasting.org', rel: 'noopener' }, 'VIEWS'), 'The run that was public on the issue date, summed from grid cells to provinces.', 'Province totals for the months in each horizon.'],
+    ['X recent search', 'Authors per province, after the rules above.', 'Counts only. No text and no account name.'],
+    [el('a', { href: 'https://www.geoboundaries.org', rel: 'noopener' }, 'geoBoundaries'), 'The province polygon used to place each VIEWS cell, from OpenStreetMap.', 'A simplified outline for the map.'],
+  ], 9));
+  root.append(el('h2', {}, 'Rules that protect the result'), el('ul', { class: 'takeaways' }, [
+    'The original one-month reference and VIEWS scale stay frozen. Selection used 2023 issue dates, including early-2024 outcomes at longer horizons; a stricter check is disclosed separately rather than changing the reference.',
+    'Forecasts use only data available on the issue date: ACLED through M−2, and a VIEWS run released before that day with inputs at least two months old.',
+    'Each forecast is saved with its actual creation time and evaluation type. Rerunning the pipeline does not change it.',
+    'Months ACLED has not finished coding are missing, never zero.',
+    'The X multiplier has not been tuned against resolved forecast scores. The November example was saved after its target period began, so it is retrospective.',
+  ].map(t => el('li', {}, t))));
+  root.append(el('h2', {}, 'Known limits'), el('ul', { class: 'takeaways' }, [
+    'VIEWS predicts UCDP state-based deaths. ACLED’s battles and explosions are the closest series in this file, and they are not the same series. A lower VIEWS total is not, by itself, a miss.',
+    'The log score rewards a forecast of zero in a quiet province. Most deaths are in a few provinces, and the national toll is the check that matches the question of how many people were killed.',
+    'ACLED is a revised snapshot. Leaving out the latest month approximates what was known on each date. It does not reconstruct the file as it stood then, because older months can be recoded later.',
+    'Splitting a week across a month end by days assumes the deaths were spread evenly through the week.',
+    'The 60- and 90-day scores reuse the 30-day months. Agreement across the three horizons is not three separate results.',
+    'One week of posts cannot be backtested. The same-week correlation, on six provinces named in the search, does not show that X improves a forecast. The multiplier also cannot raise a province the baseline has at zero.',
+    'These are research estimates, not operational warnings, and should not guide safety decisions.',
+  ].map(t => el('li', {}, t))));
   root.append(el('h2', {}, 'Pipeline status'));
   const stages = [DATA.ingest, ...(DATA.status ? DATA.status.stages : [])].filter(Boolean);
   root.append(stages.length ? table(['Stage', 'Status', 'Detail', 'When'], stages.map(s => [s.stage, s.status, s.detail, dayName(s.at)]), 9) : el('p', {}, 'The pipeline has not run yet.'));
-  root.append(el('h2', {}, 'Sources'), table(['Source', 'Used for', 'Published here'], [
-    [el('a', { href: 'https://acleddata.com', rel: 'noopener' }, 'ACLED'), DATA.acled ? `Outcomes and the baseline. Weekly aggregated data, ${dayName(DATA.acled.first_week)} to ${dayName(DATA.acled.coverage_end)}, complete through ${monthName(DATA.acled.complete_through)}.` : 'Outcomes and the baseline', 'Monthly and weekly totals by province'],
-    [el('a', { href: 'https://viewsforecasting.org', rel: 'noopener' }, 'VIEWS'), 'The outside forecast to compare with, by dated production run', 'Province totals for the months scored'],
-    ['X recent search', DATA.x ? `${DATA.x.posts.toLocaleString('en')} posts by ${DATA.x.authors.toLocaleString('en')} authors, ${dayName(DATA.x.first_post)} to ${dayName(DATA.x.last_post)}, read by ${DATA.x.extractor}` : 'The text signal', 'Author counts per province only'],
-    [el('a', { href: 'https://www.geoboundaries.org', rel: 'noopener' }, 'geoBoundaries'), 'Province boundaries, from OpenStreetMap', 'A simplified outline for the map'],
-  ], 9));
-  root.append(el('h2', {}, 'Rules that protect the result'), el('ul', { class: 'takeaways' }, [
-    'The baseline window and the VIEWS rescaling factor were fixed on 2023 before 2024 onward was scored. A later run that would pick differently stops with an error.',
-    'Forecasts use only data available on the issue date: ACLED through the month before last, and VIEWS runs released before that day.',
-    'The live forecast is saved once. Rerunning the pipeline does not change it.',
-    'Months ACLED has not finished coding are never treated as zero deaths.',
-    'The X adjustment was written down before any live outcome existed, and it is not tuned on the result.',
-  ].map(t => el('li', {}, t))));
-  root.append(el('h2', {}, 'Known limits'), el('ul', { class: 'takeaways' }, [
-    'VIEWS predicts UCDP state-based deaths. ACLED codes events differently, so even the closest definition here does not match exactly.',
-    'ACLED is a revised snapshot. Leaving out the latest month approximates what was known on each date, but cannot reconstruct it.',
-    'Splitting weeks into months by days assumes deaths are spread evenly within a week.',
-    'One week of X posts and one live issue cannot show whether X improves forecasts. Testing that needs many weekly issues.',
-    'The X search named the eastern provinces, so X attention there is partly by design, and X counts attention as much as violence.',
-    'These are research estimates, not operational warnings, and should not guide safety decisions.',
-  ].map(t => el('li', {}, t))));
 }
 
 /* Tabs */
 const TABS = [['overview', 'Overview', renderOverview], ['backtest', 'Backtest', renderBacktest], ['xcheck', 'X check', renderX],
-  ['forecast', 'Live forecast and map', renderForecast], ['how', 'How it works', renderHow], ['data', 'Data and limits', renderData]];
+  ['forecast', 'Forecast example and map', renderForecast], ['how', 'How it works', renderHow], ['data', 'Data and limits', renderData]];
 let current = null;
 function select(id) {
   for (const [tab] of TABS) {

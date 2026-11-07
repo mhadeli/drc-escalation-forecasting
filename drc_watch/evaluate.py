@@ -32,6 +32,8 @@ def sample(posts: list, n: int = 200, seed: int = 7) -> list:
     each split by language. Sampling by rule output on purpose over-represents the cases
     that matter; the gold labels themselves must be written without looking at the rules.
     """
+    if not posts or n < 1:
+        raise ValueError('Sampling requires posts and a positive sample size.')
     rng = random.Random(seed)
     strata = defaultdict(list)
     for post in posts:
@@ -49,6 +51,8 @@ def sample(posts: list, n: int = 200, seed: int = 7) -> list:
 
 
 def write_sheet(posts: list, path: Path) -> None:
+    if path.exists():
+        raise ValueError(f'{path} already exists; move it before generating a new labelling sheet.')
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -66,7 +70,10 @@ def read_gold(path: Path) -> list:
                 continue
             row = {"post_id": raw["post_id"], "lang": raw.get("lang") or "und"}
             for field in BOOL_FIELDS:
-                row[field] = (raw.get(field) or "0").strip() in ("1", "true", "yes", "y")
+                value = (raw.get(field) or '').strip().lower()
+                if value not in ('1', 'true', 'yes', 'y', '0', 'false', 'no', 'n'):
+                    raise ValueError(f"Post {raw['post_id']}: label {field} explicitly; blank is not false.")
+                row[field] = value in ('1', 'true', 'yes', 'y')
             for field in SET_FIELDS:
                 row[field] = {item.strip() for item in (raw.get(field) or "").split(";") if item.strip()}
             row["hotspots"] = {fc.resolve_hotspot(item) or item for item in row["hotspots"]}
@@ -96,7 +103,7 @@ def score(gold: list, predicted: dict) -> dict:
     for gold_row in gold:
         row = predicted.get(gold_row["post_id"])
         if row is None:
-            continue
+            raise ValueError(f"No prediction for labelled post {gold_row['post_id']}")
         report["n"] += 1
         pred = {
             "relevant": row["on_topic"],
@@ -165,8 +172,12 @@ def main() -> None:
         return
 
     gold = read_gold(args.gold)
+    if not gold:
+        raise ValueError('No labelled posts in the gold file; evaluation cannot run.')
     wanted = {row["post_id"] for row in gold}
     subset = [post for post in posts if post["id"] in wanted]
+    if {post['id'] for post in subset} != wanted:
+        raise ValueError('The gold file contains posts absent from this snapshot.')
     results = {}
     for extractor in ["rules", *args.model]:
         predicted, stats = predictions(subset, extractor)
