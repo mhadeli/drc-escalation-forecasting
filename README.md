@@ -1,4 +1,4 @@
-# DRC conflict deaths: ACLED machine learning and X posts against VIEWS
+# DRC fatalities: Can machine learning on ACLED, plus X posts, forecast DRC conflict deaths better than [VIEWS](https://viewsforecasting.org/)?
 
 **Live dashboard: [mhadeli.github.io/drc-escalation-forecasting](https://mhadeli.github.io/drc-escalation-forecasting/)**
 
@@ -28,7 +28,7 @@ VIEWS predicts UCDP state-based deaths and the outcome here is ACLED's count, so
 ## How it runs
 
 ```
-ingest (local) ──▶ prepare ──▶ ACLED model (Random Forest or XGBoost) ──▶ ACLED + X ──▶ compare with VIEWS ──▶ dashboard
+ingest (local) ──▶ prepare ──▶ ACLED model (Random Forest / XGBoost) ──▶ ACLED + X ──▶ compare with VIEWS ──▶ dashboard
 ```
 
 Ingest is the only step that reads raw data, so it runs on your machine. It writes post-free aggregates to `history/inputs/`. Pushing them starts the `pipeline` workflow on GitHub Actions, which runs the tests and every later stage, commits the results to `history/` and deploys the dashboard.
