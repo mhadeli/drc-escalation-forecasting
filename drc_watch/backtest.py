@@ -17,9 +17,40 @@ SELECTION = ('2023-01', '2023-12')
 DRAWS = 1000
 SELECTION_VERSION = 4  # All selection outcomes must also finish inside the selection year.
 FEATURE_NAMES = ('log_b1', 'trend_3m', 'trend_6m', 'control_change', 'escalation', 'deescalation', 'neighbor_deaths')
-RIDGE_PRIOR = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float)
-RIDGE_ALPHA = 25.0
-WEEKLY_ALPHA = 10.0
+FEATURE_LABELS = {'log_b1': 'Deaths in the latest coded month', 'trend_3m': '3-month trend', 'trend_6m': '6-month trend',
+                  'control_change': 'Territory changing hands', 'escalation': 'Escalation events',
+                  'deescalation': 'De-escalation events', 'neighbor_deaths': 'Deaths in neighbouring provinces'}
+ML_MODELS = ('random_forest', 'xgboost')
+ML_LABELS = {'random_forest': 'Random Forest', 'xgboost': 'XGBoost'}
+MIN_TRAINING_ROWS = 50
+
+
+def new_model(name):
+    """Both models predict log(1 + monthly deaths) from the same seven features. Settings are fixed, not tuned."""
+    if name == 'random_forest':
+        from sklearn.ensemble import RandomForestRegressor
+        return RandomForestRegressor(n_estimators=200, min_samples_leaf=5, max_features=.6, random_state=7, n_jobs=-1)
+    if name == 'xgboost':
+        from xgboost import XGBRegressor
+        return XGBRegressor(n_estimators=300, max_depth=3, learning_rate=.05, subsample=.8, colsample_bytree=.8,
+                            min_child_weight=5, random_state=7, n_jobs=4, verbosity=0)
+    raise ValueError(f'Unknown model: {name}')
+
+
+def fit_model(name, X, y):
+    if len(X) < MIN_TRAINING_ROWS:
+        return None
+    model = new_model(name)
+    model.fit(np.asarray(X, dtype=float), np.asarray(y, dtype=float))
+    return model
+
+
+def predict_deaths(model, features, months=1):
+    """Back from log(1 + monthly deaths) to deaths over the horizon. Never negative."""
+    if model is None or not features:
+        return [None] * len(features)
+    raw = model.predict(np.asarray(features, dtype=float))
+    return [max(0.0, math.expm1(max(0.0, float(v)))) * months for v in raw]
 
 
 def baseline_rate(series, issue, window, gap=GAP):
@@ -250,9 +281,8 @@ def province_series(rows, base_key):
 def feature_vector(name, issue, monthly, precursors=None, neighbors=None, gap=GAP, nowcast=None):
     """Build the 7-feature spatio-temporal vector for (province, issue).
 
-    When `nowcast` is provided (from X posts covering the M-1 reporting-lag month),
-    the model uses the nowcasted M-1 deaths and precursor signals for that province.
-    Quiet provinces (b1 == 0) stay at zero unless an additive `control_change > 0` triggers onset.
+    When `nowcast` is provided (from X posts covering the M-1 reporting-lag month), the model uses the
+    nowcasted M-1 deaths for that province in place of the month ACLED has not finished coding.
     """
     series = dict(monthly[name])
     use_gap = gap
@@ -264,11 +294,9 @@ def feature_vector(name, issue, monthly, precursors=None, neighbors=None, gap=GA
     b6 = baseline_rate(series, issue, 6, use_gap)
     if any(v is None for v in (b1, b3, b6)):
         return None
-    if nowcast and name in nowcast:
-        cc = float(nowcast[name].get('control_change', 0.0))
-        es = float(nowcast[name].get('escalation', 0.0))
-        de = float(nowcast[name].get('deescalation', 0.0))
-    elif precursors:
+    # X supplies only the deaths of the uncoded month. Its author counts are not on the scale of ACLED event counts,
+    # so the event features always come from ACLED's latest coded month.
+    if precursors:
         cc = baseline_rate(precursors['control_change'].get(name, {}), issue, 1, gap) or 0.0
         es = baseline_rate(precursors['escalation'].get(name, {}), issue, 1, gap) or 0.0
         de = baseline_rate(precursors['deescalation'].get(name, {}), issue, 1, gap) or 0.0
@@ -290,140 +318,116 @@ def feature_vector(name, issue, monthly, precursors=None, neighbors=None, gap=GA
     ], dtype=float)
 
 
-def fit_ridge(X, y, alpha=RIDGE_ALPHA):
-    """Fit Ridge regression shrunk toward the 1-month persistence prior w0 = [1, 0, ...]."""
-    if len(X) == 0:
-        return RIDGE_PRIOR.copy()
-    X_mat = np.asarray(X, dtype=float)
-    y_vec = np.asarray(y, dtype=float)
-    dim = X_mat.shape[1]
-    return np.linalg.solve(X_mat.T @ X_mat + alpha * np.eye(dim), X_mat.T @ y_vec + alpha * RIDGE_PRIOR)
+def training_set(issues, monthly, feats, months):
+    X, y = [], []
+    for ti in issues:
+        for p in monthly:
+            f = feats.get((p, ti))
+            act = outcome(monthly[p], ti, months)
+            if f is not None and act is not None:
+                X.append(f)
+                y.append(math.log1p(act / months))
+    return X, y
 
 
-def add_ml(rows, monthly, precursors=None, neighbors=None, gap=GAP, alpha=RIDGE_ALPHA):
-    """Attach walk-forward Spatio-Temporal ML predictions (`ml`) to each backtest row without future leakage."""
+def add_ml(rows, monthly, precursors=None, neighbors=None, gap=GAP, models=ML_MODELS):
+    """Walk-forward predictions `ml_<model>` for each row. Each issue's models see only outcomes known by then."""
     all_months = sorted({m for series in monthly.values() for m in series})
-    if len(all_months) < 8:
-        for r in rows:
-            r['ml'] = r.get('base_1')
-        return rows
-    first_train = all_months[6 + gap]
+    first_train = all_months[min(6 + gap, len(all_months) - 1)]
     last_issue = max((r['issue'] for r in rows), default=first_train)
-    candidate_issues = issues_between(first_train, last_issue)
-    feats = {(p, i): feature_vector(p, i, monthly, precursors, neighbors, gap)
-             for i in candidate_issues for p in monthly}
-    by_issue_horizon = {}
+    candidates = issues_between(first_train, last_issue)
+    feats = {(p, i): feature_vector(p, i, monthly, precursors, neighbors, gap) for i in candidates for p in monthly}
+    predictions = {}
     for issue in sorted({r['issue'] for r in rows}):
         cutoff = shift(issue, -gap - 1)
+        names = [p for p in monthly if feats.get((p, issue)) is not None]
         for days, months in HORIZONS.items():
-            train_issues = [ti for ti in candidate_issues if shift(ti, months - 1) <= cutoff]
-            X_tr, y_tr = [], []
-            for ti in train_issues:
-                for p in monthly:
-                    f = feats.get((p, ti))
-                    act = outcome(monthly[p], ti, months)
-                    if f is not None and act is not None:
-                        X_tr.append(f)
-                        y_tr.append(math.log1p(act / months))
-            by_issue_horizon[issue, days] = fit_ridge(X_tr, y_tr, alpha)
+            X, y = training_set([ti for ti in candidates if shift(ti, months - 1) <= cutoff], monthly, feats, months)
+            for name in models:
+                values = predict_deaths(fit_model(name, X, y), [feats[(p, issue)] for p in names], months)
+                predictions.update({(name, p, issue, days): v for p, v in zip(names, values)})
     for r in rows:
-        f = feats.get((r['province'], r['issue']))
-        w = by_issue_horizon.get((r['issue'], r['horizon']))
-        months = HORIZONS[r['horizon']]
-        if f is None or w is None:
-            r['ml'] = None
-        else:
-            r['ml'] = max(0.0, math.expm1(max(0.0, float(f @ w)))) * months
+        for name in models:
+            r[f'ml_{name}'] = predictions.get((name, r['province'], r['issue'], r['horizon']))
     return rows
 
 
-def predict_issue_ml(issue, monthly, precursors=None, neighbors=None, gap=GAP, nowcast=None, alpha=RIDGE_ALPHA):
-    """Fit the Spatio-Temporal ML model on all resolved months up to `issue - gap - 1` and predict 30/60/90d."""
+def choose_ml(rows, models=ML_MODELS):
+    """The model with the lowest mean log error on the selection year, where every outcome finished inside 2023."""
+    picked = selection_rows(rows)
+    errors = {}
+    for name in models:
+        usable = [r for r in picked if r.get(f'ml_{name}') is not None]
+        if usable and len(usable) == len(picked):
+            errors[name] = float(np.mean([log_error(r[f'ml_{name}'], r['actual']) for r in usable]))
+    if not errors:
+        raise ValueError('No ML model has complete predictions in the selection year.')
+    return min(errors, key=errors.get), errors
+
+
+def use_ml(rows, name):
+    for r in rows:
+        r['ml'] = r.get(f'ml_{name}')
+    return rows
+
+
+def predict_issue_ml(issue, monthly, precursors=None, neighbors=None, gap=GAP, nowcast=None, model='random_forest'):
+    """Train on every outcome resolved by the issue's cutoff and predict 30/60/90 days, with and without the X nowcast."""
     all_months = sorted({m for series in monthly.values() for m in series})
     first_train = all_months[min(6 + gap, len(all_months) - 1)]
     cutoff = shift(issue, -gap - 1)
-    train_candidates = issues_between(first_train, cutoff) if first_train <= cutoff else []
-    feats = {(p, ti): feature_vector(p, ti, monthly, precursors, neighbors, gap)
-             for ti in train_candidates for p in monthly}
-    weights = {}
+    candidates = issues_between(first_train, cutoff) if first_train <= cutoff else []
+    feats = {(p, ti): feature_vector(p, ti, monthly, precursors, neighbors, gap) for ti in candidates for p in monthly}
+    predictions, importance = {name: {} for name in monthly}, {}
     for days, months in HORIZONS.items():
-        valid_issues = [ti for ti in train_candidates if shift(ti, months - 1) <= cutoff]
-        X_tr, y_tr = [], []
-        for ti in valid_issues:
-            for p in monthly:
-                f = feats.get((p, ti))
-                act = outcome(monthly[p], ti, months)
-                if f is not None and act is not None:
-                    X_tr.append(f)
-                    y_tr.append(math.log1p(act / months))
-        weights[days] = fit_ridge(X_tr, y_tr, alpha)
-    predictions = {name: {} for name in monthly}
-    for name in monthly:
-        f_base = feature_vector(name, issue, monthly, precursors, neighbors, gap, nowcast=None)
-        f_x = feature_vector(name, issue, monthly, precursors, neighbors, gap, nowcast=nowcast) if nowcast and name in nowcast else None
-        for days, months in HORIZONS.items():
-            w = weights[days]
-            predictions[name][f'ml_{days}'] = None if f_base is None else round(max(0.0, math.expm1(max(0.0, float(f_base @ w)))) * months, 1)
-            predictions[name][f'x_{days}'] = None if f_x is None else round(max(0.0, math.expm1(max(0.0, float(f_x @ w)))) * months, 1)
-    return predictions, {str(d): [round(float(v), 4) for v in w] for d, w in weights.items()}
+        X, y = training_set([ti for ti in candidates if shift(ti, months - 1) <= cutoff], monthly, feats, months)
+        fitted = fit_model(model, X, y)
+        if fitted is not None and days == 30:
+            importance = {k: round(float(v), 4) for k, v in zip(FEATURE_NAMES, fitted.feature_importances_)}
+        for name in monthly:
+            base = feature_vector(name, issue, monthly, precursors, neighbors, gap)
+            with_x = feature_vector(name, issue, monthly, precursors, neighbors, gap, nowcast=nowcast) if nowcast and name in nowcast else None
+            ml = predict_deaths(fitted, [base], months)[0] if base is not None else None
+            xv = predict_deaths(fitted, [with_x], months)[0] if with_x is not None else None
+            predictions[name][f'ml_{days}'] = None if ml is None else round(ml, 1)
+            predictions[name][f'x_{days}'] = None if xv is None else round(xv, 1)
+    return predictions, {'model': model, 'trained_through': cutoff, 'importance_30': importance}
 
 
-def predict_weekly_holdout(weekly_deaths, weekly_precursors, neighbors, target_week, nowcasts_by_name, alpha=WEEKLY_ALPHA):
-    """Train the weekly Spatio-Temporal Ridge model up to `target_week - 2w` and evaluate on `target_week` (e.g. 2026-10-24).
+def predict_weekly_holdout(weekly_deaths, weekly_precursors, neighbors, target_week, nowcasts_by_name, model='random_forest'):
+    """Train a weekly version of the selected model up to `target_week - 2w` and predict `target_week`.
 
-    `weekly_deaths` maps `week_iso -> {province: deaths}` (or `(province, date) -> deaths`).
-    `nowcasts_by_name` maps label -> nowcast dict for the gap week `target_week - 1w`.
+    `weekly_deaths` maps `week_iso -> {province: deaths}`. `nowcasts_by_name` maps a label to an X nowcast of the
+    gap week `target_week - 1w`, which ACLED had not finished coding.
     """
     from datetime import date, timedelta
     target = date.fromisoformat(target_week) if isinstance(target_week, str) else target_week
-    provinces_list = sorted(neighbors) if neighbors else sorted({p for w in weekly_deaths.values() for p in (w if isinstance(w, dict) else [])})
+    provinces_list = sorted(neighbors) if neighbors else sorted({p for w in weekly_deaths.values() for p in w})
 
     def get_val(table, prov, wk):
-        iso = wk.isoformat()
-        if iso in table and isinstance(table[iso], dict):
-            return float(table[iso].get(prov, 0.0))
-        return float(table.get((prov, wk), 0.0))
+        return float((table.get(wk.isoformat()) or {}).get(prov, 0.0))
 
     def wk_feat(prov, wk, nowcast=None):
         w2 = wk - timedelta(weeks=2)
         b4 = float(np.mean([get_val(weekly_deaths, prov, wk - timedelta(weeks=i)) for i in range(2, 6)]))
         b12 = float(np.mean([get_val(weekly_deaths, prov, wk - timedelta(weeks=i)) for i in range(2, 14)]))
-        if nowcast and prov in nowcast:
-            b1 = float(nowcast[prov]['deaths'])
-            cc = float(nowcast[prov].get('control_change', 0.0))
-            es = float(nowcast[prov].get('escalation', 0.0))
-            de = float(nowcast[prov].get('deescalation', 0.0))
-        else:
-            b1 = get_val(weekly_deaths, prov, w2)
-            cc = get_val((weekly_precursors or {}).get('control_change', {}), prov, w2)
-            es = get_val((weekly_precursors or {}).get('escalation', {}), prov, w2)
-            de = get_val((weekly_precursors or {}).get('deescalation', {}), prov, w2)
+        b1 = float(nowcast[prov]['deaths']) if nowcast and prov in nowcast else get_val(weekly_deaths, prov, w2)
+        cc, es, de = (get_val((weekly_precursors or {}).get(k, {}), prov, w2) for k in ('control_change', 'escalation', 'deescalation'))
         nbs = (neighbors or {}).get(prov, ())
         nb_val = float(np.mean([get_val(weekly_deaths, nb, w2) for nb in nbs])) if nbs else 0.0
         active = 1.0 if (b1 > 0 or cc > 0) else 0.0
-        return np.array([
-            math.log1p(b1),
-            active * (math.log1p(b4) - math.log1p(b1)),
-            active * (math.log1p(b12) - math.log1p(b1)),
-            math.log1p(cc),
-            active * math.log1p(es),
-            active * math.log1p(de),
-            active * math.log1p(nb_val),
-        ], dtype=float)
+        return [math.log1p(b1), active * (math.log1p(b4) - math.log1p(b1)), active * (math.log1p(b12) - math.log1p(b1)),
+                math.log1p(cc), active * math.log1p(es), active * math.log1p(de), active * math.log1p(nb_val)]
 
-    all_weeks = sorted(date.fromisoformat(w) for w in weekly_deaths if isinstance(w, str))
+    all_weeks = sorted(date.fromisoformat(w) for w in weekly_deaths)
     train_weeks = [w for w in all_weeks if w <= target - timedelta(weeks=2) and (w - timedelta(weeks=13)) >= min(all_weeks)]
-    X_tr = [wk_feat(p, w) for w in train_weeks for p in provinces_list]
-    y_tr = [math.log1p(get_val(weekly_deaths, p, w)) for w in train_weeks for p in provinces_list]
-    weights = fit_ridge(X_tr, y_tr, alpha)
-
+    X = [wk_feat(p, w) for w in train_weeks for p in provinces_list]
+    y = [math.log1p(get_val(weekly_deaths, p, w)) for w in train_weeks for p in provinces_list]
+    fitted = fit_model(model, X, y)
     lagged_week = target - timedelta(weeks=2)
-    base_1w = {p: get_val(weekly_deaths, p, lagged_week) for p in provinces_list}
-    actual = {p: get_val(weekly_deaths, p, target) for p in provinces_list}
-    ml_only = {p: round(max(0.0, math.expm1(max(0.0, float(wk_feat(p, target) @ weights)))), 2) for p in provinces_list}
-    models = {'acled_simple': base_1w, 'ml_acled_only': ml_only}
+    predict = lambda nowcast=None: {p: round(v, 2) for p, v in zip(provinces_list, predict_deaths(fitted, [wk_feat(p, target, nowcast) for p in provinces_list]))}
+    models = {'acled_simple': {p: get_val(weekly_deaths, p, lagged_week) for p in provinces_list}, 'ml_acled_only': predict()}
     for label, nowcast in (nowcasts_by_name or {}).items():
-        models[label] = {p: round(max(0.0, math.expm1(max(0.0, float(wk_feat(p, target, nowcast) @ weights)))), 2) for p in provinces_list}
-    return {'target_week': target.isoformat(), 'lagged_week': lagged_week.isoformat(),
-            'weights': dict(zip(FEATURE_NAMES, [round(float(v), 4) for v in weights])),
-            'actual': actual, 'models': models}
+        models[label] = predict(nowcast)
+    return {'target_week': target.isoformat(), 'lagged_week': lagged_week.isoformat(), 'model': model,
+            'training_rows': len(X), 'actual': {p: get_val(weekly_deaths, p, target) for p in provinces_list}, 'models': models}

@@ -151,16 +151,21 @@ def ingest_posts(path, extractor='rules'):
             llm_rows_for_topics = llm_rows
     topics = None
     if llm_rows_for_topics:
-        rel_rows = [r for r in llm_rows_for_topics if (r.get('llm') or {}).get('relevant')]
-        src_counts = Counter((r.get('llm') or {}).get('source_type') or 'other' for r in rel_rows)
-        ev_counts = Counter(e for r in rel_rows for e in ((r.get('llm') or {}).get('event_types') or []))
-        hs_counts = Counter(h for r in rel_rows for h in ((r.get('llm') or {}).get('hotspots') or []))
+        # Rows from extract_llm.to_tagged: on_topic is the model's relevance judgement.
+        rel_rows = [r for r in llm_rows_for_topics if r.get('on_topic') and not r.get('extraction_error')]
+        if not rel_rows:
+            raise ValueError('The LLM marked no post as relevant; check the extraction before publishing a topic summary.')
+        src_counts = Counter(r.get('source_type') or 'other' for r in rel_rows)
+        ev_counts = Counter(e for r in rel_rows for e in (r.get('event_types') or []))
+        hs_counts = Counter(h for r in rel_rows for h in (r.get('hotspots') or []))
         topics = {
             'relevant_posts': len(rel_rows),
             'irrelevant_posts': len(llm_rows_for_topics) - len(rel_rows),
             'source_types': dict(src_counts.most_common()),
             'event_types': dict(ev_counts.most_common()),
             'top_hotspots': dict(hs_counts.most_common(8)),
+            'credible_posts': sum(1 for r in rel_rows if r.get('source_type') in ('news', 'field_report')),
+            'historical_posts': sum(1 for r in rel_rows if r.get('historical')),
         }
     by_week = {}
     for row in tagged:
@@ -215,15 +220,28 @@ def run_backtest(draws=backtest.DRAWS):
     key = f"base_{reference['window']}"
     backtest.add_scaled(rows, reference['views_scale'])
     backtest.add_ml(rows, monthly, precursors, neighbors)
+    chosen, ml_errors = backtest.choose_ml(rows)
+    reference = freeze_ml(reference, chosen, ml_errors)
+    backtest.use_ml(rows, reference['ml_model'])
     evaluation = [r for r in rows if r['issue'] >= EVALUATION_START]
     if not evaluation:
         raise ValueError('No resolved evaluation outcomes from 2024 onward.')
     no_gap = backtest.add_scaled(backtest.panel(monthly, views_by_issue, [i for i in issues if i >= EVALUATION_START], gap=0),
                                  reference['views_scale'])
-    backtest.add_ml(no_gap, monthly, precursors, neighbors, gap=0)
+    backtest.use_ml(backtest.add_ml(no_gap, monthly, precursors, neighbors, gap=0, models=(reference['ml_model'],)), reference['ml_model'])
+    ml_compare = {}
+    for name in backtest.ML_MODELS:
+        per = {}
+        for days in fc.HORIZONS:
+            cases = [r for r in evaluation if r['horizon'] == days and r.get(f'ml_{name}') is not None]
+            per[str(days)] = None if not cases else sum(backtest.log_error(r[f'ml_{name}'], r['actual']) for r in cases) / len(cases)
+        ml_compare[name] = per
     result = {
         'definition': data['primary'], 'window': reference['window'], 'gap_months': backtest.GAP,
         'views_scale': reference['views_scale'],
+        'ml': {'selected': reference['ml_model'], 'label': backtest.ML_LABELS[reference['ml_model']],
+               'selection_errors': reference['ml_selection_errors'], 'evaluation_errors': ml_compare,
+               'features': [backtest.FEATURE_LABELS[f] for f in backtest.FEATURE_NAMES]},
         'selection': {'period': list(backtest.SELECTION), 'version': reference.get('selection_version', 3),
                       'errors': reference.get('errors', {str(w): e for w, e in errors.items()})},
         'selection_sensitivity': {'window': window, 'outcomes_through': backtest.SELECTION[1],
@@ -284,6 +302,26 @@ def write_report(result):
     path.write_text('\n'.join(lines) + '\n')
 
 
+def freeze_ml(reference, chosen, errors):
+    """The ML model is chosen once on 2023, like the baseline window, and kept. A run that would differ fails."""
+    path = HISTORY / 'reference.json'
+    if 'ml_model' in reference:
+        if reference['ml_model'] != chosen:
+            raise ValueError(f"2023 now picks {chosen}, not the frozen {reference['ml_model']}; investigate before editing reference.json.")
+        return reference
+    reference = {**reference, 'ml_model': chosen, 'ml_selection_errors': errors,
+                 'ml_frozen_at': x.now().isoformat(timespec='seconds')}
+    x.write_json(path, reference)
+    return reference
+
+
+def ml_model():
+    reference = read(HISTORY / 'reference.json')
+    if 'ml_model' not in reference:
+        raise ValueError('No ML model has been chosen yet. Run the backtest first.')
+    return reference['ml_model']
+
+
 def freeze_reference(window, errors, scale, data):
     """Keep the original reference. New references use the stricter selection boundary."""
     path = HISTORY / 'reference.json'
@@ -339,7 +377,8 @@ def run_xcheck():
         nowcasts = {'ml_x_rules': fc.nowcast_from_x(rules_provinces, base_lagged)}
         if llm_provinces:
             nowcasts['ml_x_llm_credible'] = fc.nowcast_from_x(llm_provinces, base_lagged)
-        raw_holdout = backtest.predict_weekly_holdout(primary_weekly, data.get('weekly_precursors'), neighbors, next_week, nowcasts)
+        raw_holdout = backtest.predict_weekly_holdout(primary_weekly, data.get('weekly_precursors'), neighbors, next_week, nowcasts,
+                                                      model=ml_model())
         x_names = list(counts['provinces'])
         actual_x = [raw_holdout['actual'][n] for n in x_names]
         scores_x = {}
@@ -353,7 +392,7 @@ def run_xcheck():
         holdout = {
             'target_week': next_week, 'lagged_week': lagged_week, 'gap_week': min(weeks),
             'actual': {n: raw_holdout['actual'][n] for n in x_names},
-            'weights': raw_holdout['weights'],
+            'model': raw_holdout['model'], 'training_rows': raw_holdout['training_rows'],
             'models': scores_x,
         }
     result = {'week_start': min(weeks), 'week_end': (date.fromisoformat(max(weeks)) + timedelta(days=6)).isoformat(),
@@ -418,7 +457,7 @@ def run_forecast(force=False, issue_key=None):
     geo = read('provinces.geojson') if (INPUTS / 'provinces.geojson').exists() else {'features': []}
     neighbors = provinces.neighbors(geo)
     nowcast = fc.nowcast_from_x(x_signals, {name: rates[name] for name in fc.X_PROVINCES})
-    ml_preds, ml_weights = backtest.predict_issue_ml(issue_key, monthly, data.get('precursors'), neighbors, nowcast=nowcast)
+    ml_preds, ml_info = backtest.predict_issue_ml(issue_key, monthly, data.get('precursors'), neighbors, nowcast=nowcast, model=ml_model())
     rows = []
     for name in sorted(monthly):
         row = {'province': name, 'baseline_rate': round(rates[name], 2), 'x_multiplier': None, 'x_event_authors': events.get(name),
@@ -438,7 +477,7 @@ def run_forecast(force=False, issue_key=None):
             row[f'views_scaled_{days}'] = None if v is None else round(v * reference['views_scale'], 1)
         rows.append(row)
     saved = {'issued': issue.isoformat(), 'definition': data['primary'], 'window_months': reference['window'],
-             'views_scale': reference['views_scale'], 'ml_weights': ml_weights,
+             'views_scale': reference['views_scale'], 'ml': ml_info,
              'acled_through': acled.shift(issue_key, -2), 'x_posts': [counts['first_post'], counts['last_post']],
              'views_run': {k: run[k] for k in ('run', 'released', 'last_input')},
              'months': {str(d): [acled.shift(issue_key, i) for i in range(m)] for d, m in fc.HORIZONS.items()},
@@ -500,11 +539,11 @@ def orchestrate(draws=backtest.DRAWS):
         if not all((INPUTS / n).exists() for n in ('acled.json', 'views.json')):
             raise Skip('Needs the ingested inputs.')
         s = run_backtest(draws)['evaluation']['scores']['30']
-        if s['skill_views'] is None:
-            return f"{s['issues']} monthly issues. The baseline made no errors, so VIEWS's relative error is undefined."
-        change = -s['skill_views']
-        return (f"{s['issues']} monthly issues. At 30 days VIEWS's error is {abs(change):.0%} "
-                f"{'higher' if change > 0 else 'lower'} than the baseline's.")
+        ml, views = s.get('error_ml'), s['error_views']
+        if ml is None or not views:
+            return f"{s['issues']} monthly issues scored."
+        label = backtest.ML_LABELS[ml_model()]
+        return f"{label} chosen on 2023. At 30 days its error is {abs(1 - ml / views):.0%} {'lower' if ml < views else 'higher'} than VIEWS's."
 
     def stage_xcheck():
         if not all((INPUTS / n).exists() for n in ('acled.json', 'x_counts.json')):

@@ -170,7 +170,7 @@ def to_tagged(post, record):
                provinces=sorted({fc.HOTSPOTS[name][0] for name in found['hotspots'] if name in fc.HOTSPOTS}),
                event=bool(types), control_change='control_change' in types, escalation=found['escalation'],
                deescalation=found['deescalation'], fatalities=found['fatalities'], displaced=found['displaced'],
-               other_places=found['other_places'], source_type=found['source_type'])
+               other_places=found['other_places'], source_type=found['source_type'], event_types=sorted(types))
     return row
 
 

@@ -72,15 +72,8 @@
       "Mai-Ndombe": 0.0,
       "Kinshasa": 0.0
     },
-    "weights": {
-      "log_b1": 0.5936,
-      "trend_3m": 0.1188,
-      "trend_6m": 0.3639,
-      "control_change": 0.2072,
-      "escalation": 0.0649,
-      "deescalation": 0.1273,
-      "neighbor_deaths": 0.0908
-    },
+    "model": "random_forest",
+    "training_rows": 988,
     "models": {
       "acled_simple": {
         "log_error": 0.595,
@@ -95,39 +88,39 @@
         }
       },
       "ml_acled_only": {
-        "log_error": 0.251,
+        "log_error": 0.298,
         "spearman": 0.77,
         "predictions": {
-          "Nord-Kivu": 3.24,
-          "Sud-Kivu": 6.78,
-          "Ituri": 4.71,
-          "Tanganyika": 0.63,
-          "Mai-Ndombe": 0.0,
-          "Kinshasa": 0.0
+          "Nord-Kivu": 4.35,
+          "Sud-Kivu": 5.36,
+          "Ituri": 5.2,
+          "Tanganyika": 0.86,
+          "Mai-Ndombe": 0.05,
+          "Kinshasa": 0.05
         }
       },
       "ml_x_rules": {
-        "log_error": 0.344,
-        "spearman": 0.88,
+        "log_error": 0.312,
+        "spearman": 0.708,
         "predictions": {
-          "Nord-Kivu": 5.93,
-          "Sud-Kivu": 11.06,
-          "Ituri": 5.37,
-          "Tanganyika": 0.58,
-          "Mai-Ndombe": 0.0,
-          "Kinshasa": 0.8
+          "Nord-Kivu": 4.14,
+          "Sud-Kivu": 4.59,
+          "Ituri": 4.79,
+          "Tanganyika": 0.83,
+          "Mai-Ndombe": 0.05,
+          "Kinshasa": 0.05
         }
       },
       "ml_x_llm_credible": {
-        "log_error": 0.229,
-        "spearman": 0.77,
+        "log_error": 0.316,
+        "spearman": 0.938,
         "predictions": {
-          "Nord-Kivu": 3.35,
-          "Sud-Kivu": 7.11,
-          "Ituri": 3.71,
-          "Tanganyika": 0.6,
-          "Mai-Ndombe": 0.0,
-          "Kinshasa": 0.0
+          "Nord-Kivu": 4.24,
+          "Sud-Kivu": 4.07,
+          "Ituri": 4.07,
+          "Tanganyika": 0.98,
+          "Mai-Ndombe": 0.05,
+          "Kinshasa": 0.05
         }
       }
     }

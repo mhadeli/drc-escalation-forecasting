@@ -2,7 +2,7 @@
   "source": "X recent search, saved pull",
   "posts_sha256": "1729b6b4d3789744086a20f013e9d6fbf33ef890d51850922c50797ea0974f54",
   "extractor": "gemini-3.8-flash",
-  "ingested_at": "2026-11-08T04:37:14.938705+00:00",
+  "ingested_at": "2026-11-08T05:20:46.904855+00:00",
   "extraction": {
     "model": "gemini-3.8-flash",
     "prompt_version": "v2",
@@ -37,11 +37,35 @@
     "es": 1
   },
   "topics": {
-    "relevant_posts": 0,
-    "irrelevant_posts": 1000,
-    "source_types": {},
-    "event_types": {},
-    "top_hotspots": {}
+    "relevant_posts": 683,
+    "irrelevant_posts": 317,
+    "source_types": {
+      "opinion": 346,
+      "news": 213,
+      "other": 62,
+      "party_claim": 56,
+      "field_report": 6
+    },
+    "event_types": {
+      "armed_clash": 66,
+      "control_change": 29,
+      "attack_on_civilians": 27,
+      "displacement": 14,
+      "shelling_or_drone": 5,
+      "abduction": 2
+    },
+    "top_hotspots": {
+      "Walungu (Kaziba, Muhungu, Kamanyola)": 51,
+      "Goma / Nyiragongo": 22,
+      "Kinshasa (political violence)": 16,
+      "Uvira (Ruzizi plain)": 14,
+      "Djugu": 9,
+      "Mambasa": 5,
+      "Rutshuru": 4,
+      "Kabare / Bukavu": 4
+    },
+    "credible_posts": 219,
+    "historical_posts": 76
   },
   "provinces": {
     "Nord-Kivu": {

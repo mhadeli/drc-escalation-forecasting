@@ -127,7 +127,8 @@ class Provenance(Sandbox):
         x.write_json(self.history / 'reference.json', old)
         result = pipeline.run_backtest(draws=2)
         reference = json.loads((self.history / 'reference.json').read_text())
-        self.assertEqual(reference, old)
+        self.assertEqual({k: reference[k] for k in old}, old)  # The frozen choices never change.
+        self.assertIn(reference['ml_model'], backtest.ML_MODELS)  # The model choice is frozen alongside them.
         self.assertEqual(result['window'], 12)
         self.assertEqual(result['selection_sensitivity']['outcomes_through'], '2023-12')
 

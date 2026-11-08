@@ -23,6 +23,10 @@ def collect(history):
         # Metadata only: the dashboard does not need the full monthly tables.
         'acled': None if not acled else {k: acled.get(k) for k in ('source', 'rows', 'first_week', 'last_week', 'coverage_end',
                                                                'complete_through', 'definitions', 'primary')},
+        # National monthly totals only, for the time chart; never per-event rows.
+        'national_actual': None if not acled else {
+            m: round(sum(series[m] for series in acled['monthly'][acled['primary']].values()), 1)
+            for m in sorted(next(iter(acled['monthly'][acled['primary']].values())))},
         'views': None if not views else {'cells': views.get('cells'), 'border_cells': views.get('border_cells'),
                                          'cells_per_province': views.get('cells_per_province'), 'boundaries': views.get('boundaries')},
         'x': None if not x else {k: x.get(k) for k in ('first_post', 'last_post', 'posts', 'usable_posts', 'authors',

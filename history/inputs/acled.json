@@ -2,7 +2,7 @@
   "source": "ACLED weekly aggregated data, Democratic Republic of Congo",
   "file_sha256": "104a4cdd4e18307842d73ff5ddcc915592ee868b92c7b3bcb1513d00cb5091f4",
   "rows": 10634,
-  "retrieved_at": "2026-11-08T04:37:10.019067+00:00",
+  "retrieved_at": "2026-11-08T05:20:42.232440+00:00",
   "first_week": "2019-12-28",
   "last_week": "2026-10-24",
   "coverage_end": "2026-10-30",

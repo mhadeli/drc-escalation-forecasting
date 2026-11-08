@@ -1,48 +1,34 @@
-# DRC conflict deaths: can a simple forecast match VIEWS, and does X help?
+# DRC conflict deaths: ACLED machine learning and X posts against VIEWS
 
 **Live dashboard: [mhadeli.github.io/drc-escalation-forecasting](https://mhadeli.github.io/drc-escalation-forecasting/)**
 
-Estimates conflict deaths in each of the 26 provinces of the Democratic Republic of the Congo for one, two and three calendar months. The `30/60/90` keys are approximate legacy labels, not exact day windows. One workflow runs from ingestion to evaluation with three sources:
+Forecasts monthly conflict deaths in the 26 provinces of the Democratic Republic of the Congo, 30, 60 and 90 days ahead, and compares three forecasts: a machine-learning model on ACLED data, the same model with X posts added, and VIEWS.
 
-- **ACLED:** weekly deaths by province, from 2020. It supplies the baseline and the outcomes.
-- **VIEWS:** the published forecast to compare with, taken from the run that was public on each date.
-- **X posts:** one week of posts, checked against ACLED's same week and used to adjust one frozen November forecast example.
+## Workflow
 
-## Results so far
+1. **Ingest three sources.** ACLED weekly deaths by province from 2020, VIEWS forecasts from the run public on each date, and 1,000 X posts from 18 to 22 October 2026.
+2. **Prepare.** Put all three on the same provinces, calendar months and definition of deaths. An LLM labels each X post and keeps credible news and field reports.
+3. **Build the ACLED model.** Random Forest and XGBoost learn monthly deaths from seven ACLED features. The one with lower error on 2023 is frozen before 2024 is scored. Random Forest won, 0.605 against 0.607.
+4. **Add X posts.** ACLED is about two weeks behind. X estimates deaths in the month ACLED has not coded, and the same model makes the forecast.
+5. **Compare and evaluate.** Every month from January 2024, each model forecasts using only data available then, and is scored against what ACLED recorded.
 
-January 2024 through July 2026, using the original frozen one-month persistence baseline. The `30` horizon is one calendar month.
+## Results
 
-| Question | Number | Interpretation |
-|---|---|---|
-| Does the simple forecast match the national death toll? | **6,759 predicted; 6,811 recorded** | One-month persistence closely matches the national level. This does not establish accurate forecasts for each province or month. |
-| Does VIEWS match that toll? | **4,305 predicted** | Its total is lower, but VIEWS predicts UCDP state-based deaths while these outcomes are ACLED battles and explosions. The national-level gap is not a like-for-like loss. |
-| Where are the deaths? | **Mean province rank correlation: 0.59 baseline; 0.50 VIEWS** | The simple forecast is slightly better at ordering provinces on this sample. |
-| What is the province-month log error? | **0.43 baseline; 0.60 VIEWS; VIEWS skill interval entirely below zero** | Persistence is lower on the specified score. Every quiet province-month has the same weight as Nord-Kivu. |
+| Question | Answer |
+|---|---|
+| Does the ACLED model beat VIEWS? | Yes, at every horizon. Typical error at 30 days is ×1.55 against ×1.82 for VIEWS, 26% lower. |
+| Does it beat repeating last month's deaths? | No. It ties at 30 days (×1.55 against ×1.54) and loses at 60 and 90 days. |
+| Does X point to where people die? | Credible X authors rank the six provinces almost as ACLED does, rank correlation 0.94 in the week of 17 October. |
+| Does X improve the forecast? | In a one-week test, ranking improves from 0.77 to 0.94 and error stays about the same. One week cannot settle it. |
 
-VIEWS's mean log error is about **39% higher** than persistence, and it is worse in both Nord-Kivu and Sud-Kivu, where most deaths occur, while doing better in Ituri (**1,235** recorded deaths) and Mai-Ndombe (**193**). Weighting each province's mean error by its total deaths narrows the relative gap to about **31%**, without reversing it; this is a descriptive sensitivity check, not the primary score. Rescaling VIEWS by **1.38**, fitted on 2023, increases its log error to **0.66**. Its lower national total is therefore not a sufficient explanation for the log-score gap.
+The November 2026 forecast was rebuilt on 8 November with the selected model, so it is retrospective, not prospective. It can be scored from about 14 December 2026.
 
-The two- and three-month rows repeat the pattern. They share outcome months with the one-month score, so they are one overlapping check, not three independent results.
-
-### Does X help?
-
-**Open.** The 0.82 rank correlation is same-week attention against same-week deaths, on six provinces the search was aimed at. Kinshasa has **15 event authors and zero primary-definition deaths** in that week. This does not test whether X improves a forecast.
-
-The frozen adjustment multiplies the baseline. Kinshasa's November baseline is **zero**, so its 15 authors still produce **zero** forecast deaths. The un-decayed multipliers are about **0.58 in Ituri**, **1.08 in Nord-Kivu**, and **1.03 in Sud-Kivu**. Escalation, control-change and de-escalation are extracted but are **not used in this adjustment**. This formula can test a small reallocation among provinces with existing predicted deaths; it cannot detect a new outbreak where the baseline is zero. Another formula would be another untested rule, and one week of posts is not enough to fit one.
-
-The November example's first outcome window can be scored from **14 December 2026**, if ACLED coverage is complete. It was saved on **7 November**, after its November 1 target period began, so it is a **retrospective reconstruction**, not a prospective test. Its values remain frozen. One resolved example will still not establish that X improves forecasts.
-
-### Window choice and method
-
-The original selection was a practical near tie: one month scored **0.579**, three months **0.580**. The frozen primary choice stays **one month**: each province's most recent available monthly death rate, ending at M-2. This numerical near tie is not a statistical equivalence test.
-
-A separate boundary check restricts both issue dates and final outcome months to 2023; it selects three months (**0.545**, versus **0.566** for one month). Original late-2023 selection issues included early-2024 outcomes at longer horizons. That limitation is disclosed, not silently fixed by retuning the frozen reference after seeing evaluation results. The stricter check remains in `history/backtest.json` as `selection_sensitivity`. Results are exploratory. The information cutoff, frozen reference and missing-data rules remain the method; details and their timing are in [reports/prereg.md](reports/prereg.md).
-
-**Presentation sentence:** A one-month ACLED forecast matches the national toll and is a bit better at ranking provinces; VIEWS uses a different death definition and is worse on this log score, particularly in the Kivus; X has not been tested as a forecasting improvement.
+VIEWS predicts UCDP state-based deaths and the outcome here is ACLED's count, so part of the gap to VIEWS is a difference in definitions.
 
 ## How it runs
 
 ```
-ingest (local) ──▶ align ──▶ baseline ──▶ backtest ──▶ X check ──▶ live forecast ──▶ score ──▶ dashboard
+ingest (local) ──▶ prepare ──▶ ACLED model (Random Forest or XGBoost) ──▶ ACLED + X ──▶ compare with VIEWS ──▶ dashboard
 ```
 
 Ingest is the only step that reads raw data, so it runs on your machine. It writes post-free aggregates to `history/inputs/`. Pushing them starts the `pipeline` workflow on GitHub Actions, which runs the tests and every later stage, commits the results to `history/` and deploys the dashboard.

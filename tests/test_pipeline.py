@@ -344,16 +344,30 @@ class SpatioTemporalML(unittest.TestCase):
         self.assertIn('Nord-Kivu', nbs['Ituri'])
         self.assertNotIn('Kasai', nbs['Ituri'])
 
-    def test_additive_control_change_lifts_zero_baseline_province(self):
+    def test_x_replaces_only_the_uncoded_month_deaths(self):
         months = backtest.issues_between('2020-01', '2026-09')
-        monthly = {'Ituri': {m: 0.0 for m in months}}
-        precursors = {k: {'Ituri': {m: 0.0 for m in months}} for k in acled.PRECURSORS}
-        quiet_vec = backtest.feature_vector('Ituri', '2026-11', monthly, precursors, {'Ituri': []})
-        self.assertEqual(float(quiet_vec.sum()), 0.0)
-        nowcast = fc.nowcast_from_x({'Ituri': {'event': 5, 'control_change': 2, 'escalation': 1, 'deescalation': 0}}, {'Ituri': 0.0})
-        onset_vec = backtest.feature_vector('Ituri', '2026-11', monthly, precursors, {'Ituri': []}, nowcast=nowcast)
-        self.assertGreater(onset_vec[3], 0.0)  # Additive control_change feature is positive even when baseline is 0.
+        monthly = {'Ituri': {m: 10.0 for m in months}}
+        precursors = {k: {'Ituri': {m: 3.0 for m in months}} for k in acled.PRECURSORS}
+        plain = backtest.feature_vector('Ituri', '2026-11', monthly, precursors, {'Ituri': []})
+        nowcast = {'Ituri': {'deaths': 40.0, 'event': 9, 'control_change': 50, 'escalation': 0, 'deescalation': 0}}
+        with_x = backtest.feature_vector('Ituri', '2026-11', monthly, precursors, {'Ituri': []}, nowcast=nowcast)
+        self.assertAlmostEqual(with_x[0], math.log1p(40.0))  # Deaths of the uncoded month come from X.
+        self.assertEqual(list(with_x[3:6]), list(plain[3:6]))  # Event features stay on ACLED's scale.
 
+    def test_tree_models_never_predict_negative_deaths(self):
+        rng = __import__('numpy').random.default_rng(1)
+        X = rng.normal(size=(80, 7)).tolist()
+        y = [0.0] * 80
+        for name in backtest.ML_MODELS:
+            model = backtest.fit_model(name, X, y)
+            self.assertTrue(all(v >= 0 for v in backtest.predict_deaths(model, X[:5], 3)))
+        self.assertIsNone(backtest.fit_model('random_forest', X[:10], y[:10]))
+
+    def test_ml_choice_uses_only_outcomes_inside_2023(self):
+        rows = [{'issue': '2023-03', 'horizon': 30, 'actual': 10, 'ml_random_forest': 10, 'ml_xgboost': 50},
+                {'issue': '2023-12', 'horizon': 90, 'actual': 10, 'ml_random_forest': 999, 'ml_xgboost': 10},  # Ends in 2024.
+                {'issue': '2024-05', 'horizon': 30, 'actual': 10, 'ml_random_forest': 999, 'ml_xgboost': 10}]
+        self.assertEqual(backtest.choose_ml(rows)[0], 'random_forest')
 
 if __name__ == '__main__':
     unittest.main()

@@ -80,3 +80,14 @@ X volume tracks attention as much as violence. Check data terms before sharing.
 ## Provenance and scoring
 
 A forecast is prospective only if saved before its target period starts. The calendar date and ACLED coverage must both resolve before scoring. Score artifacts record the ACLED hash and retrieval time. Current aggregates contain a revised ACLED snapshot; the reporting gap does not recreate historical publication vintages.
+
+## Change on 2026-11-08: Random Forest and XGBoost
+
+At the author's request, the machine-learning model changed from a Ridge regression to Random Forest and XGBoost,
+with fixed settings and the same seven features. The model with the lower mean log error on 2023, counting only
+outcomes that finished inside 2023, is frozen in history/reference.json as `ml_model`. Random Forest was chosen.
+This change was made after earlier backtest results were known, so the comparison is exploratory. A variant that
+predicts the change from last month was tried once and not adopted, because it was considered after seeing results.
+
+The X nowcast now replaces only the deaths of the month ACLED has not coded. X author counts are no longer fed into
+the ACLED event-count features, because the two are on different scales.
