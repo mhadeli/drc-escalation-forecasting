@@ -2,7 +2,7 @@
 
 **Live dashboard: [mhadeli.github.io/drc-escalation-forecasting](https://mhadeli.github.io/drc-escalation-forecasting/)**
 
-Forecasts monthly conflict deaths in the 26 provinces of the Democratic Republic of the Congo, 30, 60 and 90 days ahead, and compares three forecasts: a machine-learning model on ACLED data, the same model with X posts added, and VIEWS.
+Forecasts cumulative conflict deaths over one, two and three calendar months in the 26 provinces of the Democratic Republic of the Congo, and compares three forecasts: a machine-learning model on ACLED data, the same model with X posts added, and VIEWS. The horizons are labelled 30, 60 and 90 days in the outputs. For a November issue, they cover November, November–December and November–January respectively.
 
 ## Workflow
 
@@ -16,10 +16,10 @@ Forecasts monthly conflict deaths in the 26 provinces of the Democratic Republic
 
 | Question | Answer |
 |---|---|
-| Does the ACLED model beat VIEWS? | Yes, at every horizon. Typical error at 30 days is ×1.55 against ×1.82 for VIEWS, 26% lower. |
-| Does it beat repeating last month's deaths? | No. It ties at 30 days (×1.55 against ×1.54) and loses at 60 and 90 days. |
+| Does the ACLED model beat VIEWS? | Yes, at every horizon. At 30 days, mean log error is 26% lower; the corresponding typical-error multipliers are ×1.55 against ×1.82 for VIEWS. |
+| Does it beat repeating the latest coded month's deaths (M−2)? | No. It approximately ties at 30 days (×1.55 against ×1.54) and loses at 60 and 90 days. |
 | Does X point to where people die? | Credible X authors rank the six provinces almost as ACLED does, rank correlation 0.94 in the week of 17 October. |
-| Does X improve the forecast? | In a one-week test, ranking improves from 0.77 to 0.94 and error stays about the same. One week cannot settle it. |
+| Does X improve the forecast? | In a one-week test, ranking improves from 0.77 to 0.94, while mean log error increases slightly from 0.298 to 0.316. One week cannot settle it. |
 
 The November 2026 forecast was rebuilt on 8 November with the selected model, so it is retrospective, not prospective. It can be scored from about 14 December 2026.
 
@@ -43,6 +43,8 @@ No secrets are needed on GitHub.
 
 ## Run it locally
 
+After installing the dependencies, a fresh clone can run `pipeline.py orchestrate` directly from the committed aggregates in `history/inputs/`, without raw files or API access. The ingest commands below are for refreshing those aggregates and require your own raw ACLED and X files.
+
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests
@@ -59,7 +61,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python pipeline.py dashboard && open site/index.html
 ```
 
-`orchestrate` also rebuilds `site/index.html` and writes the standalone summary `reports/backtest.md`. To use the provided data entirely offline:
+`orchestrate` also rebuilds `site/index.html` and writes the standalone summary `reports/backtest.md`. The following offline ingest example requires the named private raw files and previously downloaded VIEWS catalog, run caches and province boundaries. These files are gitignored and are not included in a fresh clone:
 
 ```bash
 .venv/bin/python pipeline.py ingest \
@@ -83,7 +85,7 @@ Copy `.env.example` to `.env` and supply your keys locally. Fetching posts and c
 # Rules remain the default and need no LLM dependencies.
 ```
 
-LLM outputs stay in `data/extractions/`; only aggregate counters are published. More than 2% extraction failures stops ingestion. Caches include prompt, schema and post content, so edited inputs cannot reuse stale outputs.
+LLM outputs stay in `data/extractions/` and `data/llm_cache/`; only aggregate counters are published. More than 2% extraction failures stops ingestion. New cache identities include the prompt, schema and post content. The extractor also accepts legacy `v1` caches identified by post ID, so those older records can still be reused after inputs change.
 
 For extraction evaluation, run `python -m drc_watch.evaluate --posts PATH sample -n 200`, manually label every boolean field, save `data/labels/gold.csv`, then run `python -m drc_watch.evaluate --posts PATH score --gold data/labels/gold.csv --model MODEL_ID`. Existing labelling sheets are never overwritten. **No extraction accuracy claim is available until those human labels exist.** The X check accepts posts spanning multiple ACLED weeks; it uses author-week counts and reports that ACLED covers full weeks, not the exact partial post window.
 
