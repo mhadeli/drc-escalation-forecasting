@@ -2,7 +2,7 @@
   "source": "X recent search, saved pull",
   "posts_sha256": "1729b6b4d3789744086a20f013e9d6fbf33ef890d51850922c50797ea0974f54",
   "extractor": "gemini-3.8-flash",
-  "ingested_at": "2026-11-08T01:47:10.924672+00:00",
+  "ingested_at": "2026-11-08T04:37:14.938705+00:00",
   "extraction": {
     "model": "gemini-3.8-flash",
     "prompt_version": "v2",
@@ -35,6 +35,13 @@
     "ar": 1,
     "tl": 1,
     "es": 1
+  },
+  "topics": {
+    "relevant_posts": 0,
+    "irrelevant_posts": 1000,
+    "source_types": {},
+    "event_types": {},
+    "top_hotspots": {}
   },
   "provinces": {
     "Nord-Kivu": {

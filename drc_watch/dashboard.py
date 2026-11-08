@@ -26,7 +26,8 @@ def collect(history):
         'views': None if not views else {'cells': views.get('cells'), 'border_cells': views.get('border_cells'),
                                          'cells_per_province': views.get('cells_per_province'), 'boundaries': views.get('boundaries')},
         'x': None if not x else {k: x.get(k) for k in ('first_post', 'last_post', 'posts', 'usable_posts', 'authors',
-                                                   'posts_per_day', 'languages', 'extractor')},
+                                                   'posts_per_day', 'languages', 'extractor', 'topics',
+                                                   'provinces', 'rules_provinces', 'llm_credible_provinces')},
     }
 
 

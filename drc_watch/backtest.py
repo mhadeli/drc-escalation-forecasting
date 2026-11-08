@@ -199,18 +199,24 @@ def add_scaled(rows, factor):
     return rows
 
 
-def national_series(rows, base_key):
-    """DRC totals per issue at 30 days: what happened, the baseline and VIEWS."""
+def national_series(rows, base_key, horizon=30):
+    """DRC totals per issue at a given horizon (default 30 days): actual, baseline, ML and VIEWS."""
     out = []
     for issue in sorted({r['issue'] for r in rows}):
-        group = [r for r in rows if r['issue'] == issue and r['horizon'] == 30]
-        if not group or any(r[base_key] is None for r in group):
+        group = [r for r in rows if r['issue'] == issue and r['horizon'] == horizon]
+        if not group or any(r[base_key] is None for r in group) or any(r['actual'] is None for r in group):
             continue
         views = None if any(r['views'] is None for r in group) else round(sum(r['views'] for r in group), 1)
         scaled = None if views is None or any(r.get('views_scaled') is None for r in group) else round(sum(r['views_scaled'] for r in group), 1)
+        ml = None if any(r.get('ml') is None for r in group) else round(sum(r['ml'] for r in group), 1)
         out.append({'month': issue, 'actual': round(sum(r['actual'] for r in group), 1),
-                    'baseline': round(sum(r[base_key] for r in group), 1), 'views': views, 'views_scaled': scaled})
+                    'baseline': round(sum(r[base_key] for r in group), 1), 'ml': ml, 'views': views, 'views_scaled': scaled})
     return out
+
+
+def national_horizons(rows, base_key):
+    """DRC totals per issue across 30, 60 and 90-day horizons."""
+    return {str(days): national_series(rows, base_key, days) for days in HORIZONS}
 
 
 def by_province(rows, base_key):
@@ -219,19 +225,23 @@ def by_province(rows, base_key):
         cases = [r for r in rows if r['province'] == name and r['horizon'] == 30 and r[base_key] is not None and r['views'] is not None]
         if not cases:
             continue
+        ml_cases = [r for r in cases if r.get('ml') is not None]
         out[name] = {'months': len(cases), 'actual': round(sum(r['actual'] for r in cases), 1),
                      'error_baseline': round(float(np.mean([log_error(r[base_key], r['actual']) for r in cases])), 3),
+                     'error_ml': round(float(np.mean([log_error(r['ml'], r['actual']) for r in ml_cases])), 3) if ml_cases else None,
                      'error_views': round(float(np.mean([log_error(r['views'], r['actual']) for r in cases])), 3)}
     return out
 
 
 def province_series(rows, base_key):
-    """Per province at 30 days: month, what happened, the baseline and VIEWS, for the drill-down chart."""
+    """Per province at 30 days: month, actual, baseline, VIEWS, and ML for the drill-down chart."""
     out = {}
     for r in sorted(rows, key=lambda r: r['issue']):
         if r['horizon'] == 30 and r[base_key] is not None:
             out.setdefault(r['province'], []).append(
-                [r['issue'], round(r['actual'], 1), round(r[base_key], 1), None if r['views'] is None else round(r['views'], 1)])
+                [r['issue'], round(r['actual'], 1), round(r[base_key], 1),
+                 None if r['views'] is None else round(r['views'], 1),
+                 None if r.get('ml') is None else round(r['ml'], 1)])
     return out
 
 

@@ -142,11 +142,26 @@ def ingest_posts(path, extractor='rules'):
     signals = fc.province_signals(tagged, times[-1], credible_only=(extractor != 'rules'))
     # If cached gemini-3.8-flash LLM extractions exist locally, include them alongside rules for side-by-side comparison.
     llm_credible = signals if extractor != 'rules' else None
+    llm_rows_for_topics = tagged if extractor != 'rules' else None
     if extractor == 'rules':
         from drc_watch import extract_llm
         if all(any(p.exists() for p in extract_llm._cache_paths(post, 'gemini-3.8-flash')) for post in posts):
             llm_rows, _ = extract_llm.tag_posts(posts, 'gemini-3.8-flash')
             llm_credible = fc.province_signals(llm_rows, times[-1], credible_only=True)
+            llm_rows_for_topics = llm_rows
+    topics = None
+    if llm_rows_for_topics:
+        rel_rows = [r for r in llm_rows_for_topics if (r.get('llm') or {}).get('relevant')]
+        src_counts = Counter((r.get('llm') or {}).get('source_type') or 'other' for r in rel_rows)
+        ev_counts = Counter(e for r in rel_rows for e in ((r.get('llm') or {}).get('event_types') or []))
+        hs_counts = Counter(h for r in rel_rows for h in ((r.get('llm') or {}).get('hotspots') or []))
+        topics = {
+            'relevant_posts': len(rel_rows),
+            'irrelevant_posts': len(llm_rows_for_topics) - len(rel_rows),
+            'source_types': dict(src_counts.most_common()),
+            'event_types': dict(ev_counts.most_common()),
+            'top_hotspots': dict(hs_counts.most_common(8)),
+        }
     by_week = {}
     for row in tagged:
         day = date.fromisoformat(row['created_at'][:10])
@@ -160,6 +175,7 @@ def ingest_posts(path, extractor='rules'):
         'usable_posts': sum(map(usable, tagged)), 'authors': len({p.get('author_id') for p in posts}),
         'posts_per_day': dict(sorted(Counter(p['created_at'][:10] for p in posts).items())),
         'languages': dict(Counter(p.get('lang', 'und') for p in posts).most_common()),
+        'topics': topics,
         'provinces': signals, 'rules_provinces': rule_signals, 'llm_credible_provinces': llm_credible,
         'weeks': weekly})
     return signals
@@ -219,6 +235,7 @@ def run_backtest(draws=backtest.DRAWS):
             else backtest.selection_rows(rows), key, draws),
         'sensitivity_no_gap': backtest.scores(no_gap, key, draws),
         'national': backtest.national_series(rows, key),
+        'national_horizons': backtest.national_horizons(rows, key),
         'provinces': backtest.by_province(evaluation, key),
         'province_series': backtest.province_series(rows, key),
         'views_runs': {i: v['run'] for i, v in views_in['issues'].items() if i in issues},

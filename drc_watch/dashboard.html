@@ -3,28 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DRC Forecast Study — A simple baseline, VIEWS and the X question</title>
-<meta name="description" content="A research briefing comparing a simple DRC fatality forecast with VIEWS: national totals, provincial ranking, prediction error and the limits of X signals.">
+<title>DRC Forecast Study — Can X posts + an ACLED baseline defeat the VIEWS deep-learning model?</title>
+<meta name="description" content="Comparing an ACLED baseline, Spatio-Temporal ML, and LLM-extracted X (tweet) signals against the complex VIEWS deep-learning (LSTM) conflict fatality forecast in the DRC.">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
-<a class="skip" href="#main-content">Skip to findings</a>
+<a class="skip" href="#main-content">Skip to content</a>
 <header>
-  <div class="masthead"><a class="wordmark" href="#/overview">DRC / Forecast study</a><span>Independent research<span class="byline"> · Hussain Adeli</span></span></div>
+  <div class="masthead"><a class="wordmark" href="#/method">DRC / Conflict Fatality Forecast Study</a><span>Independent research<span class="byline"> · Hussain Adeli</span></span></div>
   <div class="hero">
     <p class="eyebrow">Conflict forecasting, examined</p>
-    <h1>Can a simple forecast match VIEWS?<br><em>And does X help?</em></h1>
+    <h1>Can X posts + an ACLED baseline defeat the complex <em>VIEWS deep-learning (LSTM) model?</em></h1>
     <p id="lead"></p>
   </div>
   <div class="study-meta" id="study-meta"></div>
 </header>
 <nav class="tabs" role="tablist" id="tabs"></nav>
 <main id="main-content" tabindex="-1">
+  <section role="tabpanel" id="method"></section>
   <section role="tabpanel" id="overview"></section>
   <section role="tabpanel" id="backtest"></section>
   <section role="tabpanel" id="xcheck"></section>
-  <section role="tabpanel" id="forecast"></section>
   <section role="tabpanel" id="how"></section>
   <section role="tabpanel" id="data"></section>
 </main>
