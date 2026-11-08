@@ -336,8 +336,208 @@ function flow() {
 }
 function bars(items, color) {
   const max = Math.max(...items.map(i => i.value), 1e-9);
-  return el('div', {}, items.map(i => el('div', { style: 'display:grid;grid-template-columns:minmax(150px,240px) 1fr 52px;gap:10px;align-items:center;margin:6px 0;font-size:12px' },
-    el('span', {}, i.label), el('div', { style: `height:12px;width:${100 * i.value / max}%;background:${color}` }), el('span', { class: 'n' }, `${Math.round(i.value * 100)}%`))));
+  return el('div', {}, items.map(i => el('div', { style: 'display:grid;grid-template-columns:minmax(150px,240px) 1fr 84px;gap:10px;align-items:center;margin:6px 0;font-size:12px' },
+    el('span', {}, i.label), el('div', { style: `height:12px;width:${100 * i.value / max}%;background:${color}` }),
+    el('span', { class: 'n' }, i.text ?? `${Math.round(i.value * 100)}%`))));
+}
+function yearChart(id, rows) {
+  const w = Math.min(width(id), 760), h = 270, left = 52, right = 18, top = 22, bottom = 36;
+  const max = niceMax(Math.max(...rows.map(r => r.organised), 1));
+  const slot = (w - left - right) / Math.max(rows.length, 1), bw = Math.min(44, slot * .58);
+  const y = v => top + (1 - v / max) * (h - top - bottom);
+  const svg = svgEl('svg', { width: w, height: h, role: 'img', 'aria-label': 'Annual DRC conflict deaths by definition, 2020 to 2026' });
+  for (let t = 0; t <= 4; t++) {
+    const v = max * t / 4;
+    svg.append(svgEl('line', { x1: left, x2: w - right, y1: y(v), y2: y(v), stroke: 'var(--grid)' }));
+    svg.append(svgEl('text', { x: left - 8, y: y(v) + 4, 'text-anchor': 'end' }, Math.round(v).toLocaleString('en')));
+  }
+  svg.append(svgEl('text', { x: 4, y: 12 }, 'Deaths per year'));
+  rows.forEach((r, i) => {
+    const cx = left + (i + .5) * slot, x0 = cx - bw / 2, yState = y(r.state), yOrg = y(r.organised), y0 = y(0);
+    const g = svgEl('g', {});
+    g.append(svgEl('rect', { x: x0, y: yState, width: bw, height: Math.max(0, y0 - yState), fill: 'var(--baseline)' }));
+    g.append(svgEl('rect', { x: x0, y: yOrg, width: bw, height: Math.max(0, yState - yOrg), fill: 'var(--views)', opacity: '.78' }));
+    g.append(svgEl('text', { x: cx, y: h - 12, 'text-anchor': 'middle' }, r.months < 12 ? `${r.year}*` : r.year));
+    g.addEventListener('mousemove', e => showTip(e, `${r.year} (${r.months} complete months)`, [
+      `Battles & explosions (state proxy): ${fmt(r.state)}`,
+      `Violence against civilians: ${fmt(r.civilians)}`,
+      `All organised violence: ${fmt(r.organised)}`,
+    ]));
+    g.addEventListener('mouseleave', hideTip);
+    svg.append(g);
+  });
+  return svg;
+}
+function renderEda() {
+  const root = document.getElementById('eda');
+  root.replaceChildren();
+  const A = DATA.acled, V = DATA.views;
+  if (!A && !V && !X.posts) return empty(root, 'Ingested data summaries are not available yet.');
+
+  if (A && A.by_province) {
+    const totState = A.by_province.reduce((s, r) => s + r.state, 0);
+    const totOrg = A.by_province.reduce((s, r) => s + r.organised, 0);
+    const totCiv = A.by_province.reduce((s, r) => s + r.civilians, 0);
+    const top3 = A.by_province.slice(0, 3);
+    const top3Share = totState > 0 ? top3.reduce((s, r) => s + r.state, 0) / totState : 0;
+    const one = chapter('01', 'Source 1 · ACLED weekly conflict records',
+      'Seven years of DRC fatalities, concentrated in three eastern provinces',
+      `${(A.rows ?? 0).toLocaleString('en')} province-week-event records from ${dayName(A.first_week)} to ${dayName(A.coverage_end)} (${A.months_n} complete calendar months through ${monthName(A.complete_through)}). Weeks crossing a month boundary are split by days.`);
+    one.append(el('div', { class: 'tiles' },
+      el('div', { class: 'tile' }, el('div', { class: 'label' }, 'State-based proxy (primary target)'),
+        el('div', { class: 'value' }, fmt(totState)),
+        el('div', { class: 'note' }, `${(A.definitions?.state || []).join(' + ')}. Closest ACLED match to VIEWS’s UCDP state-based deaths.`)),
+      el('div', { class: 'tile' }, el('div', { class: 'label' }, 'All organised violence'),
+        el('div', { class: 'value' }, fmt(totOrg)),
+        el('div', { class: 'note' }, `Adds ${fmt(totCiv)} deaths from Violence against civilians (${Math.round(100 * totCiv / Math.max(totOrg, 1))}% of organised toll).`)),
+      el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Concentration in top 3 provinces'),
+        el('div', { class: 'value' }, `${(100 * top3Share).toFixed(1)}%`),
+        el('div', { class: 'note' }, `${top3.map(r => r.province).join(', ')} are the only provinces with deaths in all ${A.months_n} of ${A.months_n} months.`))));
+
+    if (A.by_year && A.by_year.length) {
+      one.append(el('h3', {}, 'Annual fatalities by definition, 2020 – 2026'),
+        el('div', { class: 'legend' },
+          el('span', {}, el('i', { style: 'background:var(--baseline)' }), 'Battles & explosions (state proxy)'),
+          el('span', {}, el('i', { style: 'background:var(--views);opacity:.78' }), 'Violence against civilians')),
+        el('figure', { class: 'chart scroll', id: 'acledYearChart' }));
+    }
+
+    const pickA = el('select', { 'aria-label': 'ACLED provinces shown' },
+      el('option', { value: '10' }, 'Top 10 provinces by state-based deaths'),
+      el('option', { value: '26' }, 'All 26 DRC provinces'));
+    const boxA = el('div', {});
+    const drawA = () => {
+      const shown = A.by_province.slice(0, Number(pickA.value));
+      boxA.replaceChildren(table(
+        ['Province', 'State-based deaths', 'Share of DRC', 'Violence vs civilians', 'All organised', `Active months (/${A.months_n})`, 'Territory changes', 'Escalation events', 'Agreements'],
+        shown.map(r => [r.province, fmt(r.state), `${(100 * r.state / Math.max(totState, 1)).toFixed(1)}%`, fmt(r.civilians), fmt(r.organised),
+          `${r.active_months}`, fmt(r.control_change), fmt(r.escalation), fmt(r.deescalation)])
+          .concat([[el('strong', {}, 'All 26 provinces'), fmt(totState), '100.0%', fmt(totCiv), fmt(totOrg), '—',
+            fmt(A.by_province.reduce((s, r) => s + r.control_change, 0)),
+            fmt(A.by_province.reduce((s, r) => s + r.escalation, 0)),
+            fmt(A.by_province.reduce((s, r) => s + r.deescalation, 0))]])));
+    };
+    pickA.addEventListener('change', drawA);
+    drawA();
+    one.append(el('h3', {}, 'Province distribution and ACLED precursor events'),
+      el('div', { class: 'controls' }, el('label', {}, 'Show ', pickA)), boxA,
+      el('p', { class: 'small' }, 'Precursor event counts come from ACLED sub-event types: territory changes (non-state actor overtakes territory or government regains territory), escalation (group/activity changes, looting, riots and protests), and agreements.'),
+      takeaway(`Over 92% of state-based conflict deaths occur in Nord-Kivu, Ituri and Sud-Kivu, while most western and central provinces record zero deaths in the majority of months. Choosing the state-based proxy (${fmt(totState)} deaths) rather than all organised violence (${fmt(totOrg)}) is essential to match VIEWS’s target definition.`));
+    root.append(one);
+    if (A.by_year && A.by_year.length) {
+      document.getElementById('acledYearChart').append(yearChart('acledYearChart', A.by_year),
+        el('figcaption', {}, `*2026 covers ${A.by_year.at(-1).months} complete months (through ${monthName(A.complete_through)}). Hover over any bar for exact annual totals.`));
+    }
+  }
+
+  if (V && V.by_province) {
+    const east = V.by_province.filter(r => ['Nord-Kivu', 'Sud-Kivu', 'Ituri'].includes(r.province));
+    const quiet = V.by_province.filter(r => !['Nord-Kivu', 'Sud-Kivu', 'Ituri'].includes(r.province));
+    const eastCells = east.reduce((s, r) => s + r.cells, 0);
+    const eastAcled = east.reduce((s, r) => s + r.acled_mean, 0);
+    const eastViews = east.reduce((s, r) => s + r.views_mean, 0);
+    const quietAcled = quiet.reduce((s, r) => s + r.acled_mean, 0);
+    const quietViews = quiet.reduce((s, r) => s + r.views_mean, 0);
+    const two = chapter('02', 'Source 2 · VIEWS monthly production runs',
+      `${V.cells} PRIO-GRID cells across ${V.issues_n} monthly issues and ${V.runs_n} dated runs`,
+      `VIEWS publishes monthly state-based fatality forecasts on a 0.5° × 0.5° (~55 km) grid. Each cell is mapped to the province containing its centre (${V.border_cells} border cells assigned to the nearest province). For every monthly issue from ${monthName(V.first_issue)} to ${monthName(V.last_issue)}, the pipeline selects the newest run released strictly before the issue date with input data at least two months old.`);
+    two.append(el('div', { class: 'tiles' },
+      el('div', { class: 'tile' }, el('div', { class: 'label' }, 'PRIO-GRID cells in the DRC'),
+        el('div', { class: 'value' }, `${V.cells}`),
+        el('div', { class: 'note' }, `Nord-Kivu, Sud-Kivu and Ituri cover only ${eastCells} cells (${(100 * eastCells / Math.max(V.cells, 1)).toFixed(1)}% of the grid), while large quiet provinces span up to 62 cells each.`)),
+      el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Eastern front (3 provinces, mean / month)'),
+        el('div', { class: 'value' }, `${fmt(eastViews)} vs ${fmt(eastAcled)}`),
+        el('div', { class: 'note' }, `Across ${V.resolved_issues_n} resolved issues, VIEWS predicts ${fmt(eastViews)} deaths/month against ${fmt(eastAcled)} recorded by ACLED (${Math.round(100 * (1 - eastViews / Math.max(eastAcled, 1)))}% lower).`)),
+      el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Other 23 provinces (mean / month)'),
+        el('div', { class: 'value' }, `${fmt(quietViews)} vs ${fmt(quietAcled)}`),
+        el('div', { class: 'note' }, `Small positive cell means summed across ${V.cells - eastCells} cells produce non-zero forecasts in months where ACLED records 0.`))));
+
+    const pickV = el('select', { 'aria-label': 'VIEWS provinces shown' },
+      el('option', { value: '10' }, 'Top 10 provinces by recorded deaths'),
+      el('option', { value: '26' }, 'All 26 DRC provinces'));
+    const boxV = el('div', {});
+    const drawV = () => {
+      const shown = V.by_province.slice(0, Number(pickV.value));
+      boxV.replaceChildren(table(
+        ['Province', 'PRIO-GRID cells', 'Grid share', 'ACLED mean / mo', 'VIEWS mean / mo', 'Difference (VIEWS − ACLED)', `Zero-death months (/${V.resolved_issues_n})`],
+        shown.map(r => {
+          const diff = r.views_mean - r.acled_mean;
+          return [r.province, `${r.cells}`, `${(100 * r.cells / Math.max(V.cells, 1)).toFixed(1)}%`, fmt(r.acled_mean), fmt(r.views_mean),
+            `${diff >= 0 ? '+' : ''}${num(diff, 1)}`, `${r.zero_months}`];
+        })));
+    };
+    pickV.addEventListener('change', drawV);
+    drawV();
+
+    const gens = ['fatalities001', 'fatalities002', 'fatalities003'].map(prefix => {
+      const group = (V.runs || []).filter(r => r.run.startsWith(prefix));
+      if (!group.length) return null;
+      return [prefix, `${group.length}`, `${group.reduce((s, r) => s + r.issues, 0)}`,
+        `${monthName(group[0].first_issue)} – ${monthName(group.at(-1).last_issue)}`,
+        `${dayName(group[0].released)} – ${dayName(group.at(-1).released)}`,
+        prefix === 'fatalities001' ? 'sc_pgm_sb_main = ln(deaths + 1), converted via expm1' : 'main_mean = expected deaths per cell-month'];
+    }).filter(Boolean);
+
+    two.append(el('h3', {}, `Province grid cells and 1-month forecast vs ACLED (${V.resolved_issues_n} resolved issues)`),
+      el('div', { class: 'controls' }, el('label', {}, 'Show ', pickV)), boxV,
+      el('h3', {}, 'VIEWS production model generations cached in the study'),
+      table(['Model generation', 'Distinct runs', 'Issues served', 'Issue window', 'Release dates', 'Published field & scale'], gens, 1),
+      takeaway('Comparing cell counts with monthly fatalities shows two structural differences: in the 3 eastern conflict provinces (only 61 grid cells), VIEWS predicts lower totals than ACLED’s state-based proxy; in large quiet provinces with 30–62 cells, summing small cell-level probabilities produces ~0.5–2 predicted deaths every month when ACLED records zero.'));
+    root.append(two);
+  }
+
+  if (X && X.posts) {
+    const t = X.topics || {};
+    const days = Object.entries(X.posts_per_day || {});
+    const langs = Object.entries(X.languages || {});
+    const langNames = { fr: 'French', en: 'English', zxx: 'No linguistic content (media/links)', ro: 'Romanian', in: 'Indonesian', ar: 'Arabic', tl: 'Tagalog', es: 'Spanish', und: 'Undetermined' };
+    const evLabels = { armed_clash: 'Armed clashes', control_change: 'Territory / control changes', attack_on_civilians: 'Attacks on civilians', displacement: 'Displacement reports', shelling_or_drone: 'Shelling or drone strikes', abduction: 'Abductions / kidnappings' };
+    const three = chapter('03', 'Source 3 · X posts and Gemini LLM extraction',
+      `${X.posts.toLocaleString('en')} posts from ${X.authors.toLocaleString('en')} authors (${dayName(X.first_post)} – ${dayName(X.last_post)})`,
+      `Fetched via X recent search using seven daily quotas across French and English conflict keywords. Every post is classified both by deterministic keyword/gazetteer rules and by ${X.extractor || 'Gemini'} (${X.extraction?.prompt_version || 'v2'} schema). Only aggregate counts are stored in git.`);
+    three.append(el('div', { class: 'tiles' },
+      el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Filtering funnel'),
+        el('div', { class: 'value' }, `${X.posts} → ${t.credible_posts ?? X.usable_posts}`),
+        el('div', { class: 'note' }, `${X.posts} raw posts → ${t.relevant_posts ?? 'n/a'} on-topic (${t.irrelevant_posts ?? 'n/a'} off-topic) → ${X.usable_posts} current (${t.historical_posts ?? 0} historical dropped) → ${t.credible_posts ?? 'n/a'} credible news/field reports.`)),
+      el('div', { class: 'tile' }, el('div', { class: 'label' }, 'Languages in snapshot'),
+        el('div', { class: 'value' }, `${Math.round(100 * (X.languages?.fr || 0) / X.posts)}% FR · ${Math.round(100 * (X.languages?.en || 0) / X.posts)}% EN`),
+        el('div', { class: 'note' }, langs.map(([k, v]) => `${langNames[k] || k}: ${v}`).join(' · '))),
+      el('div', { class: 'tile' }, el('div', { class: 'label' }, 'LLM extraction reliability'),
+        el('div', { class: 'value' }, `${X.extraction?.errors ?? 0} errors`),
+        el('div', { class: 'note' }, `${(X.extraction?.posts ?? X.posts).toLocaleString('en')} posts parsed with structured output (${((X.extraction?.tokens?.input || 0) / 1000).toFixed(0)}k input / ${((X.extraction?.tokens?.output || 0) / 1000).toFixed(0)}k output tokens).`))));
+
+    const grid1 = el('div', { class: 'brief-grid equal' },
+      el('div', {},
+        el('h3', {}, 'Daily post volume (UTC)'),
+        bars(days.map(([d, c]) => ({ label: dayName(d), value: c, text: `${c}` })), 'var(--x)'),
+        el('h3', {}, 'Source types among on-topic posts (LLM)'),
+        t.source_types ? bars(Object.entries(t.source_types).map(([k, c]) => ({
+          label: ({ opinion: 'Opinion / commentary', news: 'News outlets & journalists', other: 'Other', party_claim: 'Partisan / belligerent claims', field_report: 'Eyewitness / NGO field reports' })[k] || k,
+          value: c, text: `${c} (${Math.round(100 * c / Math.max(t.relevant_posts, 1))}%)`
+        })), 'var(--baseline)') : null),
+      el('div', {},
+        el('h3', {}, 'Violent event types extracted (LLM)'),
+        t.event_types ? bars(Object.entries(t.event_types).map(([k, c]) => ({ label: evLabels[k] || k, value: c, text: `${c}` })), 'var(--x)') : null,
+        el('h3', {}, 'Top conflict hotspots named in posts'),
+        t.top_hotspots ? bars(Object.entries(t.top_hotspots).map(([k, c]) => ({ label: k, value: c, text: `${c}` })), 'var(--baseline)') : null));
+    three.append(grid1);
+
+    const rulesP = X.rules_provinces || {};
+    const llmP = X.llm_credible_provinces || X.provinces || {};
+    const pNames = Object.keys(llmP);
+    if (pNames.length) {
+      three.append(el('h3', {}, 'Unique authors by province and precursor signal: Keyword rules vs LLM credible filter'),
+        table(['Province', 'Rules: all authors', 'Rules: event', 'Rules: control change', 'Rules: escalation', 'Rules: de-escalation',
+          'LLM credible: authors', 'LLM credible: event', 'LLM credible: control change', 'LLM credible: escalation'],
+          pNames.map(p => {
+            const rp = rulesP[p] || {}, lp = llmP[p] || {};
+            return [p, `${rp.authors ?? 0}`, `${rp.event ?? 0}`, `${rp.control_change ?? 0}`, `${rp.escalation ?? 0}`, `${rp.deescalation ?? 0}`,
+              `${lp.authors ?? 0}`, `${lp.event ?? 0}`, `${lp.control_change ?? 0}`, `${lp.escalation ?? 0}`];
+          })),
+        takeaway('Half of on-topic X posts are opinion or partisan claims. Without source filtering, keyword rules tag 52 authors (15 reporting "events") in Kinshasa because national political posts name the capital. Restricting to LLM-verified news and field reports reduces Kinshasa to 1 event author while keeping Sud-Kivu (18), Nord-Kivu (4) and Ituri (4) at the top.'));
+    }
+    root.append(three);
+  }
 }
 function step(i, title, text, ...extra) {
   const s = stageOf(STEPS[i - 1].stage);
@@ -415,8 +615,9 @@ function renderLimits() {
 }
 
 /* Tabs */
-const TABS = [['results', 'Results', renderResults], ['xsignal', 'How X was evaluated', renderX],
-  ['workflow', 'Workflow', renderWorkflow], ['limits', 'Limitations and next steps', renderLimits]];
+const TABS = [['results', 'Results', renderResults], ['eda', 'Exploratory data analysis', renderEda],
+  ['xsignal', 'How X was evaluated', renderX], ['workflow', 'Workflow', renderWorkflow],
+  ['limits', 'Limitations and next steps', renderLimits]];
 let current = null;
 function select(id) {
   for (const [tab] of TABS) {
