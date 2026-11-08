@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest import TestCase, mock, skipUnless
@@ -222,3 +223,12 @@ class LLMPrivacy(Sandbox):
         with mock.patch.object(self.extractor, 'tag_posts', return_value=([fc.classify(post)], stats)):
             pipeline.ingest_posts(path, 'gemini-test')
         self.assertNotIn(SECRET, (pipeline.INPUTS / 'x_counts.json').read_text())
+
+
+class ModelChoice(TestCase):
+    def test_a_near_tie_keeps_the_frozen_model_but_a_real_change_fails(self):
+        reference = {'ml_model': 'random_forest'}
+        with mock.patch.object(pipeline, 'HISTORY', Path(tempfile.mkdtemp())):
+            self.assertEqual(pipeline.freeze_ml(reference, 'xgboost', {'random_forest': .6070, 'xgboost': .6052})['ml_model'], 'random_forest')
+            with self.assertRaises(ValueError):
+                pipeline.freeze_ml(reference, 'xgboost', {'random_forest': .70, 'xgboost': .60})

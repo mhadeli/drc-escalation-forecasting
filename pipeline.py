@@ -240,7 +240,7 @@ def run_backtest(draws=backtest.DRAWS):
         'definition': data['primary'], 'window': reference['window'], 'gap_months': backtest.GAP,
         'views_scale': reference['views_scale'],
         'ml': {'selected': reference['ml_model'], 'label': backtest.ML_LABELS[reference['ml_model']],
-               'selection_errors': reference['ml_selection_errors'], 'evaluation_errors': ml_compare,
+               'selection_errors': reference['ml_selection_errors'], 'selection_errors_this_run': ml_errors, 'evaluation_errors': ml_compare,
                'features': [backtest.FEATURE_LABELS[f] for f in backtest.FEATURE_NAMES]},
         'selection': {'period': list(backtest.SELECTION), 'version': reference.get('selection_version', 3),
                       'errors': reference.get('errors', {str(w): e for w, e in errors.items()})},
@@ -302,12 +302,19 @@ def write_report(result):
     path.write_text('\n'.join(lines) + '\n')
 
 
+ML_TIE_TOLERANCE = .01  # Relative 2023 error gap below which the two models count as tied.
+
+
 def freeze_ml(reference, chosen, errors):
     """The ML model is chosen once on 2023, like the baseline window, and kept. A run that would differ fails."""
     path = HISTORY / 'reference.json'
     if 'ml_model' in reference:
-        if reference['ml_model'] != chosen:
-            raise ValueError(f"2023 now picks {chosen}, not the frozen {reference['ml_model']}; investigate before editing reference.json.")
+        frozen = reference['ml_model']
+        if frozen != chosen:
+            # A near tie can flip between machines (CPU, library build). Keep the frozen choice unless the gap is material.
+            gap = (errors[frozen] - errors[chosen]) / errors[chosen]
+            if gap > ML_TIE_TOLERANCE:
+                raise ValueError(f"2023 now picks {chosen} by {gap:.1%}, not the frozen {frozen}; investigate before editing reference.json.")
         return reference
     reference = {**reference, 'ml_model': chosen, 'ml_selection_errors': errors,
                  'ml_frozen_at': x.now().isoformat(timespec='seconds')}
