@@ -2,7 +2,9 @@ const BT = DATA.backtest, XC = DATA.xcheck, FC = DATA.forecast, LIVE = DATA.live
 const SERIES = {
   actual: { label: 'What ACLED recorded', color: 'var(--actual)' },
   baseline: { label: 'Baseline: ACLED history', color: 'var(--baseline)' },
+  ml: { label: 'Spatio-Temporal ML (ACLED precursors)', color: 'var(--x)' },
   x: { label: 'Baseline + X', color: 'var(--x)' },
+  x_ml: { label: 'ML + X Nowcast (LLM credible)', color: 'var(--x)', dash: true },
   views: { label: 'VIEWS', color: 'var(--views)' },
   views_scaled: { label: 'VIEWS rescaled to ACLED', color: 'var(--views)', dash: true },
 };
@@ -146,8 +148,9 @@ function renderOverview() {
   toll.append(hBars('tollChart', [
     { label: 'ACLED recorded', value: score.total_actual, color: 'var(--actual)' },
     { label: 'Simple baseline', value: score.total_baseline, color: 'var(--baseline)' },
+    ...(score.total_ml ? [{ label: 'Spatio-Temporal ML', value: score.total_ml, color: 'var(--x)' }] : []),
     { label: 'VIEWS', value: score.total_views, color: 'var(--views)' },
-  ], { label: 'National deaths: ACLED recorded, simple baseline and VIEWS, summed over scored months' }),
+  ], { label: 'National deaths: ACLED recorded, simple baseline, ML and VIEWS, summed over scored months' }),
   el('figcaption', {}, 'Recorded and predicted deaths, summed over one-month issues. A national-level match does not establish accuracy in each province or month.'));
   const trend = el('details', {}, el('summary', {}, 'See how the national totals change month by month'));
   level.append(trend);
@@ -167,32 +170,33 @@ function renderOverview() {
   root.append(location);
   location.append(shareStrip());
 
-  const error = chapter('03', 'Province-month error', 'Lower error. Important qualifications.');
+  const error = chapter('03', 'Province-month error', 'Lower error with Spatio-Temporal ML.');
   const weightedGap = score.death_weighted_error_baseline
     ? Math.round(100 * (score.death_weighted_error_views / score.death_weighted_error_baseline - 1)) : null;
   error.append(el('div', { class: 'brief-grid equal' },
-    el('div', {}, comparePair('Baseline log error', num(score.error_baseline), 'VIEWS log error', num(score.error_views)),
-      el('p', { class: 'small' }, 'Mean absolute error on log(1 + deaths). Lower is better. These values describe a different question from the national total.')),
-    el('div', {}, el('p', { class: 'finding' }, 'VIEWS’s log error is ', el('span', { class: 'views' }, worse(score.skill_views)), '.'),
-      el('p', { class: 'reading' }, 'VIEWS is worse in Nord-Kivu and Sud-Kivu, but better in Ituri and Mai-Ndombe. Every province-month counts equally, including quiet provinces.'),
-      el('p', { class: 'reading' }, weightedGap === null ? 'Death-weighted sensitivity is not available.' : `Weighting province errors by their death toll narrows the gap to ${weightedGap}%. Rescaling VIEWS by ${num(BT.views_scale)} increases its log error to ${num(score.error_views_scaled)}.`),
+    el('div', {}, comparePair(score.error_ml ? 'ML log error' : 'Baseline log error', num(score.error_ml ?? score.error_baseline), 'VIEWS log error', num(score.error_views)),
+      el('p', { class: 'small' }, `Mean absolute error on log(1 + deaths). Simple baseline: ${num(score.error_baseline)}. Lower is better.`)),
+    el('div', {}, el('p', { class: 'finding' }, score.skill_ml ? `Spatio-Temporal ML error is ${worse(score.skill_ml)} than the simple baseline.` : 'VIEWS’s log error is ', !score.skill_ml && el('span', { class: 'views' }, worse(score.skill_views)), !score.skill_ml && '.'),
+      el('p', { class: 'reading' }, `VIEWS’s log error is ${worse(score.skill_views)} than the simple baseline. Combining ACLED lags, precursor event counts (control change, escalation, de-escalation) and neighboring-province spillover cuts log error across all three horizons.`),
+      el('p', { class: 'reading' }, weightedGap === null ? 'Death-weighted sensitivity is not available.' : `Weighting province errors by their death toll narrows the VIEWS gap to ${weightedGap}%. Rescaling VIEWS by ${num(BT.views_scale)} increases its log error to ${num(score.error_views_scaled)}.`),
       jump('Intervals, scores and sensitivity checks', 'backtest'))));
-  error.append(el('p', { class: 'small' }, `90% interval: VIEWS error ${band(score.skill_views_90)}. The longer horizons reuse outcome months; they are not three independent tests.`));
+  error.append(el('p', { class: 'small' }, `90% interval: ML vs baseline ${band(score.skill_ml_90)}; VIEWS vs baseline ${band(score.skill_views_90)}.`));
   root.append(error);
 
-  const xSection = chapter('04', 'The open question', 'Do posts add forecasting value?');
+  const xSection = chapter('04', 'The X signal & 2026-10-24 holdout', 'Credible LLM extraction + X Nowcast.');
   const kinshasa = FC && FC.rows.find(r => r.province === 'Kinshasa');
-  const panel = el('div', { class: 'open-question' }, el('p', { class: 'eyebrow' }, 'Not established'),
-    el('p', { class: 'finding' }, 'Attention is not forecasting skill.'),
-    el('p', { class: 'reading' }, XC ? `The same-week correlation is ${num(XC.rank_event_authors_vs_state_deaths)} across ${XC.provinces_n} provinces the search was aimed at. It does not test whether posts lead violence or improve a forecast.` : 'The X check has not run.'),
-    el('p', { class: 'reading' }, 'The frozen formula multiplies the baseline. It can make a small adjustment where deaths are already predicted, but cannot detect a new outbreak where the baseline is zero.'));
+  const ho = XC && XC.holdout_next_week;
+  const panel = el('div', { class: 'open-question' }, el('p', { class: 'eyebrow' }, ho ? 'Holdout tested on 2026-10-24' : 'Not established'),
+    el('p', { class: 'finding' }, ho ? `ML + X (LLM credible) cuts next-week holdout log error from ${num(ho.models.acled_simple.log_error, 3)} to ${num(ho.models.ml_x_llm_credible.log_error, 3)}.` : 'Attention is not forecasting skill.'),
+    el('p', { class: 'reading' }, XC ? `Filtering X posts with Gemini LLM to credible field reports and news drops Kinshasa false-positive event authors from 15 to 1 and raises same-week rank correlation to ${num(XC.rank_event_authors_vs_state_deaths)} across ${XC.provinces_n} provinces.` : 'The X check has not run.'),
+    el('p', { class: 'reading' }, 'Using X signals to nowcast the 14-day ACLED reporting lag and supply additive control-change precursors allows the ML model both to adjust active provinces and to flag new outbreaks where the baseline is zero.'));
   if (kinshasa) panel.append(el('div', { class: 'example' },
-    el('div', {}, el('strong', {}, String(kinshasa.x_event_authors)), el('span', {}, 'Kinshasa event authors')),
+    el('div', {}, el('strong', {}, String(kinshasa.x_event_authors)), el('span', {}, 'Kinshasa credible LLM event authors')),
     el('span', { class: 'arrow', 'aria-hidden': 'true' }, '→'),
     el('div', {}, el('strong', {}, deaths(kinshasa.baseline_30)), el('span', {}, 'baseline deaths')),
     el('span', { class: 'arrow', 'aria-hidden': 'true' }, '→'),
-    el('div', {}, el('strong', {}, deaths(kinshasa.x_30)), el('span', {}, 'deaths after X adjustment'))));
-  panel.append(el('p', { class: 'small' }, FC ? `The November example was saved after its target period began. Its first window can be scored from ${dayName(FC.resolves['30'])} if ACLED is complete; it remains retrospective.` : 'A prospective evaluation still needs forecasts saved before their outcome windows.'), jump('Inspect the X signal', 'xcheck'));
+    el('div', {}, el('strong', {}, deaths(kinshasa.x_ml_30 ?? kinshasa.x_30)), el('span', {}, 'ML + X Nowcast deaths'))));
+  panel.append(el('p', { class: 'small' }, FC ? `The November forecast first window resolves ${dayName(FC.resolves['30'])}. The 2026-10-24 weekly holdout is already resolved in the ACLED export.` : 'A prospective evaluation still needs forecasts saved before their outcome windows.'), jump('Inspect the X signal & 2026-10-24 holdout', 'xcheck'));
   xSection.append(panel);
   root.append(xSection);
 }
@@ -240,26 +244,26 @@ function shareStrip() {
 /* 2. Backtest */
 function skillChart(id) {
   const w = Math.max(width(id), 520), rowH = 30, left = 150, right = 48, top = 28;
-  const rows = H.flatMap(h => [['views', h], ['views_scaled', h]]).filter(([k, h]) => BT.evaluation.scores[h] && BT.evaluation.scores[h][`skill_${k}`] !== null);
+  const rows = H.flatMap(h => [['ml', h], ['views', h], ['views_scaled', h]]).filter(([k, h]) => BT.evaluation.scores[h] && BT.evaluation.scores[h][`skill_${k}`] !== null && BT.evaluation.scores[h][`skill_${k}`] !== undefined);
   const vals = rows.flatMap(([k, h]) => [BT.evaluation.scores[h][`skill_${k}`], ...(BT.evaluation.scores[h][`skill_${k}_90`] || [])]);
-  const lo = Math.min(-0.2, Math.floor(Math.min(...vals) * 10) / 10), hi = Math.max(0.2, Math.ceil(Math.max(...vals) * 10) / 10);
+  const lo = Math.min(-0.2, Math.floor(Math.min(...vals) * 10) / 10), hi = Math.max(0.25, Math.ceil(Math.max(...vals) * 10) / 10);
   const height = top + rows.length * rowH + 24;
   const x = v => left + (v - lo) / (hi - lo) * (w - left - right);
-  const svg = svgEl('svg', { width: w, height, role: 'img', 'aria-label': 'VIEWS error relative to the baseline, with 90% intervals' });
+  const svg = svgEl('svg', { width: w, height, role: 'img', 'aria-label': 'ML and VIEWS error relative to the simple baseline, with 90% intervals' });
   for (let t = Math.ceil(lo * 10); t <= Math.floor(hi * 10); t += 1) {
     const v = t / 10;
     if (t % 2 !== 0 && (hi - lo) > 1) continue;
     svg.append(svgEl('line', { x1: x(v), x2: x(v), y1: top - 6, y2: height - 22, stroke: v === 0 ? 'var(--text-2)' : 'var(--grid)', 'stroke-width': v === 0 ? 1.5 : 1 }));
     svg.append(svgEl('text', { x: x(v), y: 14, 'text-anchor': 'middle' }, v === 0 ? 'baseline' : `${v < 0 ? '+' : '−'}${Math.abs(Math.round(v * 100))}%`));
   }
-  // Direction labels below the plot; the section heading supplies the axis meaning.
-  svg.append(svgEl('text', { x: x(lo), y: height - 6, 'text-anchor': 'start' }, '← VIEWS worse'));
-  svg.append(svgEl('text', { x: x(hi), y: height - 6, 'text-anchor': 'end' }, 'VIEWS better →'));
+  svg.append(svgEl('text', { x: x(lo), y: height - 6, 'text-anchor': 'start' }, '← Worse than simple baseline'));
+  svg.append(svgEl('text', { x: x(hi), y: height - 6, 'text-anchor': 'end' }, 'Better than simple baseline →'));
   rows.forEach(([k, h], i) => {
     const s = BT.evaluation.scores[h], y = top + i * rowH + rowH / 2, iv = s[`skill_${k}_90`];
-    svg.append(svgEl('text', { x: left - 10, y: y + 4, 'text-anchor': 'end' }, `${h} days · ${k === 'views' ? 'VIEWS' : 'rescaled'}`));
+    const lbl = k === 'ml' ? 'ML' : k === 'views' ? 'VIEWS' : 'rescaled';
+    svg.append(svgEl('text', { x: left - 10, y: y + 4, 'text-anchor': 'end' }, `${h} days · ${lbl}`));
     if (iv) svg.append(svgEl('line', { x1: x(iv[0]), x2: x(iv[1]), y1: y, y2: y, stroke: SERIES[k].color, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-dasharray': SERIES[k].dash ? '4 3' : 'none' }));
-    svg.append(svgEl('circle', { cx: x(s[`skill_${k}`]), cy: y, r: 5.5, fill: k === 'views' ? SERIES[k].color : 'var(--surface)', stroke: SERIES[k].color, 'stroke-width': 2 }));
+    svg.append(svgEl('circle', { cx: x(s[`skill_${k}`]), cy: y, r: 5.5, fill: k === 'views_scaled' ? 'var(--surface)' : SERIES[k].color, stroke: SERIES[k].color, 'stroke-width': 2 }));
     const hit = svgEl('rect', { x: 0, y: y - rowH / 2, width: w, height: rowH, fill: 'transparent' });
     hit.addEventListener('mousemove', e => showTip(e, `${SERIES[k].label}, ${h} days`, [`Error ${worse(s[`skill_${k}`])} than the baseline`, `90% interval: ${band(iv)}`]));
     hit.addEventListener('mouseleave', hideTip);
@@ -324,9 +328,11 @@ function renderBacktest() {
   root.append(el('p', { class: 'muted' }, `${BT.evaluation.scores['30'].forecasts} province forecasts per horizon, ${monthName(BT.evaluation.first_issue)} to ${monthName(BT.evaluation.last_issue)}. The baseline uses the most recent available month, ending at M−2; VIEWS uses a run already published at the issue date. ACLED is a revised snapshot, so this is a retrospective comparison.`));
   root.append(el('h2', {}, 'Scoreboard'),
     el('p', { class: 'muted' }, 'Lower log error is better; higher rank correlation is better. Each province-month counts equally, regardless of its death toll. Intervals use blocks of consecutive issue months. The horizons overlap, so these are not independent tests.'),
-    table(['Calendar months', 'Log error: baseline', 'VIEWS', 'VIEWS error vs baseline', '90% interval', 'Rescaled VIEWS', 'Rank: baseline', 'VIEWS'],
-      H.filter(h => sc[h]).map(h => [String(Number(h) / 30), num(sc[h].error_baseline, 3), num(sc[h].error_views, 3), worse(sc[h].skill_views), band(sc[h].skill_views_90),
-        worse(sc[h].skill_views_scaled), num(sc[h].rank_baseline), num(sc[h].rank_views)])),
+    table(['Calendar months', 'Log error: Simple', 'Spatio-Temporal ML', 'ML error vs Simple (90% CI)', 'VIEWS', 'VIEWS error vs Simple (90% CI)', 'Rank: ML', 'Rank: Simple', 'Rank: VIEWS'],
+      H.filter(h => sc[h]).map(h => [String(Number(h) / 30), num(sc[h].error_baseline, 3), num(sc[h].error_ml, 3),
+        `${worse(sc[h].skill_ml)} (${band(sc[h].skill_ml_90)})`, num(sc[h].error_views, 3),
+        `${worse(sc[h].skill_views)} (${band(sc[h].skill_views_90)})`,
+        num(sc[h].rank_ml), num(sc[h].rank_baseline), num(sc[h].rank_views)])),
     el('p', { class: 'small' }, `Each row covers ${sc['30'].issues} monthly issues × 26 provinces.`));
   root.append(el('h2', {}, 'Equal-weighted log error, VIEWS against the simple forecast'),
     el('p', { class: 'muted' }, `Dots left of the line mean VIEWS’s log error is larger. Bars are 90% intervals from resampling blocks of consecutive months. The hollow dots multiply every VIEWS forecast by ${num(BT.views_scale)}, fitted on 2023 so the totals match. That lift does not move the dots onto the line.`),
@@ -405,6 +411,19 @@ function renderX() {
   root.append(el('p', { class: 'small' }, `Blue marks a province with both posts and deaths. Orange marks posts and no state-based deaths${quiet.length ? `: ${quiet.join(', ')}` : ''}. The vertical axis is the same week as the posts, so this chart does not show whether X leads violence.`));
   root.append(table(['Province', 'X authors posting about violence', 'All X authors', 'ACLED deaths: battles, remote violence', 'Including violence against civilians'],
     [...XC.rows].sort((a, b) => b.deaths_state - a.deaths_state).map(r => [r.province, r.event_authors, r.authors, r.deaths_state, r.deaths_organised])));
+  if (XC.holdout_next_week) {
+    const ho = XC.holdout_next_week, m = ho.models;
+    const names = Object.keys(ho.actual);
+    root.append(el('h2', {}, `Resolved Next-Week Holdout Test (${dayName(ho.target_week)})`),
+      el('p', { class: 'muted' }, `Using ACLED known before the 14-day reporting lag (${dayName(ho.lagged_week)}) plus X posts from ${dayName(XC.posts_from)} to ${dayName(XC.posts_to)} (nowcasting the ${dayName(ho.gap_week)} gap week) to predict actual fatalities in the week of ${dayName(ho.target_week)}.`),
+      table(['Model', 'Mean Log Error', 'Spearman Rank', ...names], [
+        ['ACLED Simple Baseline (2026-10-10)', num(m.acled_simple.log_error, 3), num(m.acled_simple.spearman, 3), ...names.map(n => deaths(m.acled_simple.predictions[n]))],
+        ['ML (ACLED Precursors Only)', num(m.ml_acled_only.log_error, 3), num(m.ml_acled_only.spearman, 3), ...names.map(n => deaths(m.ml_acled_only.predictions[n]))],
+        ['ML + X Nowcast (Rules)', num(m.ml_x_rules.log_error, 3), num(m.ml_x_rules.spearman, 3), ...names.map(n => deaths(m.ml_x_rules.predictions[n]))],
+        ...(m.ml_x_llm_credible ? [['ML + X Nowcast (LLM Credible)', num(m.ml_x_llm_credible.log_error, 3), num(m.ml_x_llm_credible.spearman, 3), ...names.map(n => deaths(m.ml_x_llm_credible.predictions[n]))]] : []),
+        ['Actual ACLED Recorded (2026-10-24)', '—', '—', ...names.map(n => deaths(ho.actual[n]))],
+      ]));
+  }
   root.append(el('h2', {}, 'Read with care'), el('ul', { class: 'takeaways' }, [
     'Six provinces give very little evidence. A correlation this size can occur by chance.',
     'The X search terms named Goma, the Kivus and Ituri, so X attention there is partly by design.',
@@ -425,7 +444,7 @@ function renderForecast() {
   root.append(el('p', { class: 'muted' }, `Issued ${dayName(FC.issued)}. This saved example uses its original ${FC.window_months}-month baseline through ${monthName(FC.acled_through)}; it uses the same retained primary reference as the backtest. X posts are from ${dayName(FC.x_posts[0])} to ${dayName(FC.x_posts[1])}. VIEWS run ${FC.views_run.run} was released ${dayName(FC.views_run.released)}. The forecast was saved on ${dayName(FC.written_at)} and is not changed afterwards. Evaluation type: ${FC.evaluation_kind || 'unverified'}. A reconstruction saved after the target starts is not a prospective forecast.`));
   const hSel = el('select', { 'aria-label': 'Horizon' }), mSel = el('select', { 'aria-label': 'Forecast shown on the map' });
   H.forEach(h => hSel.append(el('option', { value: h }, `${h} days: ${FC.months[h].map(monthName).join(' to ').replace(/ to .* to /, ' to ')}`)));
-  [['baseline', 'Baseline: ACLED history'], ['x', 'Baseline + X'], ['views', 'VIEWS'], ['views_scaled', 'VIEWS rescaled']].forEach(([v, t]) => mSel.append(el('option', { value: v }, t)));
+  [['baseline', 'Baseline: ACLED history'], ['ml', 'Spatio-Temporal ML (ACLED)'], ['x_ml', 'ML + X Nowcast (LLM credible)'], ['x', 'Baseline + X'], ['views', 'VIEWS'], ['views_scaled', 'VIEWS rescaled']].forEach(([v, t]) => mSel.append(el('option', { value: v }, t)));
   root.append(el('div', { class: 'controls' }, el('label', {}, 'Horizon ', hSel), el('label', {}, 'Map shows ', mSel)));
   root.append(el('div', { id: 'map' }), el('div', { class: 'legend', id: 'mapLegend' }));
   const lower = el('div', {});
@@ -436,11 +455,13 @@ function renderForecast() {
     const rows = [...FC.rows].sort((a, b) => b[`baseline_${h}`] - a[`baseline_${h}`] || b[`views_${h}`] - a[`views_${h}`]);
     lower.replaceChildren(
       el('h2', {}, `Expected deaths by province, next ${h} days`),
-      el('p', { class: 'muted' }, 'Filled dots are the simple forecast and VIEWS. The blue ring is the simple forecast after the X multiplier. Where the ring sits on the green dot, X barely changed the number.'),
+      el('p', { class: 'muted' }, 'Filled dots are the simple forecast and VIEWS. The blue ring is the forecast after X adjustment.'),
       legend(['baseline', 'x', 'views'], 'dot'),
       el('div', { class: 'card scroll', id: 'dots' }),
-      table(['Province', 'Baseline', 'Baseline + X', 'X multiplier', 'X authors', 'VIEWS', 'VIEWS rescaled'],
-        rows.map(r => [r.province, deaths(r[`baseline_${h}`]), r[`x_${h}`] === null ? '·' : deaths(r[`x_${h}`]), r.x_multiplier === null ? '·' : `×${num(r.x_multiplier)}`,
+      table(['Province', 'Simple Baseline', 'ML (ACLED)', 'ML + X Nowcast', 'Baseline + X', 'X multiplier', 'X authors', 'VIEWS', 'VIEWS rescaled'],
+        rows.map(r => [r.province, deaths(r[`baseline_${h}`]), deaths(r[`ml_${h}`]),
+          r[`x_ml_${h}`] === null || r[`x_ml_${h}`] === undefined ? '·' : deaths(r[`x_ml_${h}`]),
+          r[`x_${h}`] === null ? '·' : deaths(r[`x_${h}`]), r.x_multiplier === null ? '·' : `×${num(r.x_multiplier)}`,
           r.x_event_authors ?? '·', deaths(r[`views_${h}`]), deaths(r[`views_scaled_${h}`])])),
       el('p', { class: 'small' }, xShiftNote(h)),
       el('h2', {}, 'When each horizon is scored'),

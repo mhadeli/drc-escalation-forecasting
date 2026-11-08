@@ -16,6 +16,11 @@ DEFINITIONS = {
 }
 PRIMARY = 'state'
 REPORTING_LAG_DAYS = 14  # A month counts as complete only this long after it ends.
+PRECURSORS = ('event', 'control_change', 'escalation', 'deescalation')
+CONTROL_CHANGE_SUBTYPES = ('Non-state actor overtakes territory', 'Government regains territory')
+ESCALATION_SUBTYPES = ('Change to group/activity', 'Looting/property destruction')
+ESCALATION_TYPES = ('Riots', 'Protests')
+DEESCALATION_SUBTYPES = ('Agreement',)
 
 
 def number(text):
@@ -75,6 +80,23 @@ def weekly_totals(rows, definition=PRIMARY):
         if row['event_type'] in types:
             totals[row['admin1'], row['week']] += row['fatalities']
     return dict(totals)
+
+
+def weekly_precursors(rows):
+    """Extract weekly precursor event counts matching the X signal schema (event, control_change, escalation, deescalation)."""
+    counts = {name: defaultdict(int) for name in PRECURSORS}
+    for row in rows:
+        key = (row['admin1'], row['week'])
+        etype, subtype, events = row['event_type'], row.get('sub_event_type', ''), row['events']
+        if etype in DEFINITIONS[PRIMARY]:
+            counts['event'][key] += events
+        if subtype in CONTROL_CHANGE_SUBTYPES:
+            counts['control_change'][key] += events
+        if subtype in ESCALATION_SUBTYPES or etype in ESCALATION_TYPES:
+            counts['escalation'][key] += events
+        if subtype in DEESCALATION_SUBTYPES:
+            counts['deescalation'][key] += events
+    return {name: dict(series) for name, series in counts.items()}
 
 
 def coverage(rows, as_of=None):

@@ -11,13 +11,18 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
-from pydantic import BaseModel, Field
-
 from drc_watch import forecast as fc
 from drc_watch.fetch_recent import DATA, load_env
 
+try:
+    from pydantic import BaseModel, Field
+except ImportError:  # Allows reading cached LLM extractions without optional dependencies installed.
+    BaseModel = object
+    Field = lambda **kwargs: None
+
 CACHE = DATA / 'llm_cache'
 PROMPT_VERSION = 'v2'
+CREDIBLE_SOURCES = ('field_report', 'news')
 FALLBACK_MODELS = {'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-1'}
 
 Hotspot = Literal[tuple(fc.HOTSPOTS)]
@@ -131,12 +136,19 @@ def _call_claude(client, post, model):
     return result
 
 
-def extract_one(client, post, model):
-    identity = json.dumps([SYSTEM, PostExtraction.model_json_schema(), post['id'], post['created_at'], post['text']], sort_keys=True)
+def _cache_paths(post, model):
+    schema = PostExtraction.model_json_schema() if hasattr(PostExtraction, 'model_json_schema') else {}
+    identity = json.dumps([SYSTEM, schema, post['id'], post['created_at'], post['text']], sort_keys=True)
     digest = hashlib.sha256(identity.encode()).hexdigest()
-    path = CACHE / model / PROMPT_VERSION / f'{digest}.json'
+    return CACHE / model / PROMPT_VERSION / f'{digest}.json', CACHE / model / 'v1' / f"{post['id']}.json"
+
+
+def extract_one(client, post, model):
+    path, legacy = _cache_paths(post, model)
     if path.exists():
         return json.loads(path.read_text())
+    if legacy.exists():
+        return json.loads(legacy.read_text())
     started = time.time()
     call = _call_gemini if is_gemini(model) else _call_claude
     record = {'prompt_version': PROMPT_VERSION, **call(client, post, model), 'seconds': round(time.time() - started, 2)}
@@ -155,7 +167,7 @@ def to_tagged(post, record):
         return row
     types = set(found['event_types'])
     row.update(on_topic=found['relevant'], historical=found['historical'], hotspots=found['hotspots'], actors=found['actors'],
-               provinces=sorted({fc.HOTSPOTS[name][0] for name in found['hotspots']}),
+               provinces=sorted({fc.HOTSPOTS[name][0] for name in found['hotspots'] if name in fc.HOTSPOTS}),
                event=bool(types), control_change='control_change' in types, escalation=found['escalation'],
                deescalation=found['deescalation'], fatalities=found['fatalities'], displaced=found['displaced'],
                other_places=found['other_places'], source_type=found['source_type'])
@@ -163,7 +175,8 @@ def to_tagged(post, record):
 
 
 def tag_posts(posts, model, workers=4):
-    client = _client(model)
+    need_api = any(not any(p.exists() for p in _cache_paths(post, model)) for post in posts)
+    client = _client(model) if need_api else None
     with ThreadPoolExecutor(max_workers=workers) as pool:
         records = list(pool.map(lambda post: extract_one(client, post, model), posts))
     usage = {key: sum((r.get('usage') or {}).get(key, 0) for r in records) for key in ('input', 'output', 'cache_read')}

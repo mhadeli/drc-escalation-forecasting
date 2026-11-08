@@ -1,13 +1,23 @@
 {
   "source": "X recent search, saved pull",
   "posts_sha256": "1729b6b4d3789744086a20f013e9d6fbf33ef890d51850922c50797ea0974f54",
-  "extractor": "rules",
-  "ingested_at": "2026-11-07T23:16:40.308230+00:00",
-  "extraction": {},
+  "extractor": "gemini-3.8-flash",
+  "ingested_at": "2026-11-08T01:47:10.924672+00:00",
+  "extraction": {
+    "model": "gemini-3.8-flash",
+    "prompt_version": "v2",
+    "posts": 1000,
+    "errors": 0,
+    "tokens": {
+      "input": 487615,
+      "output": 441730,
+      "cache_read": 0
+    }
+  },
   "first_post": "2026-10-18T20:25:11+00:00",
   "last_post": "2026-10-22T19:03:08+00:00",
   "posts": 1000,
-  "usable_posts": 780,
+  "usable_posts": 607,
   "authors": 636,
   "posts_per_day": {
     "2026-10-18": 27,
@@ -27,6 +37,50 @@
     "es": 1
   },
   "provinces": {
+    "Nord-Kivu": {
+      "authors": 7,
+      "event": 4,
+      "control_change": 1,
+      "escalation": 1,
+      "deescalation": 0
+    },
+    "Sud-Kivu": {
+      "authors": 20,
+      "event": 18,
+      "control_change": 4,
+      "escalation": 1,
+      "deescalation": 0
+    },
+    "Ituri": {
+      "authors": 5,
+      "event": 4,
+      "control_change": 0,
+      "escalation": 0,
+      "deescalation": 0
+    },
+    "Tanganyika": {
+      "authors": 0,
+      "event": 0,
+      "control_change": 0,
+      "escalation": 0,
+      "deescalation": 0
+    },
+    "Mai-Ndombe": {
+      "authors": 0,
+      "event": 0,
+      "control_change": 0,
+      "escalation": 0,
+      "deescalation": 0
+    },
+    "Kinshasa": {
+      "authors": 9,
+      "event": 1,
+      "control_change": 0,
+      "escalation": 4,
+      "deescalation": 0
+    }
+  },
+  "rules_provinces": {
     "Nord-Kivu": {
       "authors": 40,
       "event": 21,
@@ -70,32 +124,76 @@
       "deescalation": 7
     }
   },
+  "llm_credible_provinces": {
+    "Nord-Kivu": {
+      "authors": 7,
+      "event": 4,
+      "control_change": 1,
+      "escalation": 1,
+      "deescalation": 0
+    },
+    "Sud-Kivu": {
+      "authors": 20,
+      "event": 18,
+      "control_change": 4,
+      "escalation": 1,
+      "deescalation": 0
+    },
+    "Ituri": {
+      "authors": 5,
+      "event": 4,
+      "control_change": 0,
+      "escalation": 0,
+      "deescalation": 0
+    },
+    "Tanganyika": {
+      "authors": 0,
+      "event": 0,
+      "control_change": 0,
+      "escalation": 0,
+      "deescalation": 0
+    },
+    "Mai-Ndombe": {
+      "authors": 0,
+      "event": 0,
+      "control_change": 0,
+      "escalation": 0,
+      "deescalation": 0
+    },
+    "Kinshasa": {
+      "authors": 9,
+      "event": 1,
+      "control_change": 0,
+      "escalation": 4,
+      "deescalation": 0
+    }
+  },
   "weeks": {
     "2026-10-17": {
       "Nord-Kivu": {
-        "authors": 40,
-        "event": 21,
-        "control_change": 4,
-        "escalation": 6,
-        "deescalation": 3
+        "authors": 7,
+        "event": 4,
+        "control_change": 1,
+        "escalation": 1,
+        "deescalation": 0
       },
       "Sud-Kivu": {
-        "authors": 64,
-        "event": 48,
-        "control_change": 16,
-        "escalation": 20,
+        "authors": 20,
+        "event": 18,
+        "control_change": 4,
+        "escalation": 1,
         "deescalation": 0
       },
       "Ituri": {
-        "authors": 15,
-        "event": 10,
-        "control_change": 2,
-        "escalation": 3,
+        "authors": 5,
+        "event": 4,
+        "control_change": 0,
+        "escalation": 0,
         "deescalation": 0
       },
       "Tanganyika": {
-        "authors": 1,
-        "event": 1,
+        "authors": 0,
+        "event": 0,
         "control_change": 0,
         "escalation": 0,
         "deescalation": 0
@@ -108,11 +206,11 @@
         "deescalation": 0
       },
       "Kinshasa": {
-        "authors": 52,
-        "event": 15,
-        "control_change": 1,
-        "escalation": 15,
-        "deescalation": 7
+        "authors": 9,
+        "event": 1,
+        "control_change": 0,
+        "escalation": 4,
+        "deescalation": 0
       }
     }
   }

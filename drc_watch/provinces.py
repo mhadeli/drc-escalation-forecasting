@@ -101,3 +101,20 @@ def map_geojson(shapes, tolerance=.04):
         features.append({'type': 'Feature', 'properties': {'province': name},
                          'geometry': {'type': 'MultiPolygon', 'coordinates': outlines}})
     return {'type': 'FeatureCollection', 'features': features}
+
+
+def neighbors(geojson_or_shapes, threshold=0.25):
+    """Return {province: [adjacent provinces]} from either a GeoJSON FeatureCollection or a shapes dict."""
+    if isinstance(geojson_or_shapes, dict) and 'features' in geojson_or_shapes:
+        points = {f['properties']['province']: {(round(x, 2), round(y, 2))
+                  for poly in f['geometry']['coordinates'] for ring in poly for x, y in ring}
+                  for f in geojson_or_shapes['features']}
+    else:
+        points = {name: {(round(x, 2), round(y, 2)) for poly in polys for ring in poly for x, y in ring}
+                  for name, polys in (geojson_or_shapes or {}).items()}
+    result = {}
+    for name in PROVINCES:
+        pts_a = points.get(name, set())
+        result[name] = sorted(other for other in PROVINCES if other != name and pts_a and any(
+            math.hypot(x1 - x2, y1 - y2) <= threshold for x1, y1 in pts_a for x2, y2 in points.get(other, set())))
+    return result

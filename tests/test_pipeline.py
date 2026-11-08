@@ -327,5 +327,33 @@ class Extraction(unittest.TestCase):
         self.assertEqual(report['fields']['event']['f1'], 1.0)
 
 
+class SpatioTemporalML(unittest.TestCase):
+    def test_weekly_precursors_and_neighbors(self):
+        rows = [
+            {'admin1': 'Nord-Kivu', 'week': date(2026, 10, 17), 'event_type': 'Battles',
+             'sub_event_type': 'Non-state actor overtakes territory', 'events': 3, 'fatalities': 12},
+            {'admin1': 'Sud-Kivu', 'week': date(2026, 10, 17), 'event_type': 'Strategic developments',
+             'sub_event_type': 'Agreement', 'events': 1, 'fatalities': 0},
+        ]
+        pre = acled.weekly_precursors(rows)
+        self.assertEqual(pre['event'][('Nord-Kivu', date(2026, 10, 17))], 3)
+        self.assertEqual(pre['control_change'][('Nord-Kivu', date(2026, 10, 17))], 3)
+        self.assertEqual(pre['deescalation'][('Sud-Kivu', date(2026, 10, 17))], 1)
+        shapes = {'Ituri': [square(0, 0, 1)], 'Nord-Kivu': [square(1, 0, 1)], 'Kasai': [square(10, 10, 1)]}
+        nbs = provinces.neighbors(shapes)
+        self.assertIn('Nord-Kivu', nbs['Ituri'])
+        self.assertNotIn('Kasai', nbs['Ituri'])
+
+    def test_additive_control_change_lifts_zero_baseline_province(self):
+        months = backtest.issues_between('2020-01', '2026-09')
+        monthly = {'Ituri': {m: 0.0 for m in months}}
+        precursors = {k: {'Ituri': {m: 0.0 for m in months}} for k in acled.PRECURSORS}
+        quiet_vec = backtest.feature_vector('Ituri', '2026-11', monthly, precursors, {'Ituri': []})
+        self.assertEqual(float(quiet_vec.sum()), 0.0)
+        nowcast = fc.nowcast_from_x({'Ituri': {'event': 5, 'control_change': 2, 'escalation': 1, 'deescalation': 0}}, {'Ituri': 0.0})
+        onset_vec = backtest.feature_vector('Ituri', '2026-11', monthly, precursors, {'Ituri': []}, nowcast=nowcast)
+        self.assertGreater(onset_vec[3], 0.0)  # Additive control_change feature is positive even when baseline is 0.
+
+
 if __name__ == '__main__':
     unittest.main()

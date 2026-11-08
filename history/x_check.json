@@ -9,29 +9,33 @@
   "rows": [
     {
       "province": "Nord-Kivu",
-      "event_authors": 21,
-      "authors": 40,
+      "event_authors": 4,
+      "authors": 7,
+      "llm_event_authors": 4,
       "deaths_state": 6,
       "deaths_organised": 10
     },
     {
       "province": "Sud-Kivu",
-      "event_authors": 48,
-      "authors": 64,
+      "event_authors": 18,
+      "authors": 20,
+      "llm_event_authors": 18,
       "deaths_state": 24,
       "deaths_organised": 31
     },
     {
       "province": "Ituri",
-      "event_authors": 10,
-      "authors": 15,
+      "event_authors": 4,
+      "authors": 5,
+      "llm_event_authors": 4,
       "deaths_state": 3,
       "deaths_organised": 7
     },
     {
       "province": "Tanganyika",
-      "event_authors": 1,
-      "authors": 1,
+      "event_authors": 0,
+      "authors": 0,
+      "llm_event_authors": 0,
       "deaths_state": 0,
       "deaths_organised": 0
     },
@@ -39,19 +43,94 @@
       "province": "Mai-Ndombe",
       "event_authors": 0,
       "authors": 0,
+      "llm_event_authors": 0,
       "deaths_state": 0,
       "deaths_organised": 1
     },
     {
       "province": "Kinshasa",
-      "event_authors": 15,
-      "authors": 52,
+      "event_authors": 1,
+      "authors": 9,
+      "llm_event_authors": 1,
       "deaths_state": 0,
       "deaths_organised": 0
     }
   ],
-  "rank_event_authors_vs_state_deaths": 0.819688599970537,
-  "rank_event_authors_vs_organised_deaths": 0.6667366910003157,
-  "rank_all_authors_vs_state_deaths": 0.6375355777548621,
+  "rank_event_authors_vs_state_deaths": 0.9379580992210835,
+  "rank_llm_event_authors_vs_state_deaths": 0.9379580992210835,
+  "rank_event_authors_vs_organised_deaths": 0.8508410434878082,
+  "rank_all_authors_vs_state_deaths": 0.6468431588153822,
+  "holdout_next_week": {
+    "target_week": "2026-10-24",
+    "lagged_week": "2026-10-10",
+    "gap_week": "2026-10-17",
+    "actual": {
+      "Nord-Kivu": 9.0,
+      "Sud-Kivu": 7.0,
+      "Ituri": 4.0,
+      "Tanganyika": 0.0,
+      "Mai-Ndombe": 0.0,
+      "Kinshasa": 0.0
+    },
+    "weights": {
+      "log_b1": 0.5936,
+      "trend_3m": 0.1188,
+      "trend_6m": 0.3639,
+      "control_change": 0.2072,
+      "escalation": 0.0649,
+      "deescalation": 0.1273,
+      "neighbor_deaths": 0.0908
+    },
+    "models": {
+      "acled_simple": {
+        "log_error": 0.595,
+        "spearman": 0.708,
+        "predictions": {
+          "Nord-Kivu": 8.0,
+          "Sud-Kivu": 16.0,
+          "Ituri": 24.0,
+          "Tanganyika": 2.0,
+          "Mai-Ndombe": 0.0,
+          "Kinshasa": 0.0
+        }
+      },
+      "ml_acled_only": {
+        "log_error": 0.251,
+        "spearman": 0.77,
+        "predictions": {
+          "Nord-Kivu": 3.24,
+          "Sud-Kivu": 6.78,
+          "Ituri": 4.71,
+          "Tanganyika": 0.63,
+          "Mai-Ndombe": 0.0,
+          "Kinshasa": 0.0
+        }
+      },
+      "ml_x_rules": {
+        "log_error": 0.344,
+        "spearman": 0.88,
+        "predictions": {
+          "Nord-Kivu": 5.93,
+          "Sud-Kivu": 11.06,
+          "Ituri": 5.37,
+          "Tanganyika": 0.58,
+          "Mai-Ndombe": 0.0,
+          "Kinshasa": 0.8
+        }
+      },
+      "ml_x_llm_credible": {
+        "log_error": 0.229,
+        "spearman": 0.77,
+        "predictions": {
+          "Nord-Kivu": 3.35,
+          "Sud-Kivu": 7.11,
+          "Ituri": 3.71,
+          "Tanganyika": 0.6,
+          "Mai-Ndombe": 0.0,
+          "Kinshasa": 0.0
+        }
+      }
+    }
+  },
   "provinces_n": 6
 }

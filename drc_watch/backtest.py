@@ -16,6 +16,10 @@ GAP = 1                    # Months between the newest month the baseline uses a
 SELECTION = ('2023-01', '2023-12')
 DRAWS = 1000
 SELECTION_VERSION = 4  # All selection outcomes must also finish inside the selection year.
+FEATURE_NAMES = ('log_b1', 'trend_3m', 'trend_6m', 'control_change', 'escalation', 'deescalation', 'neighbor_deaths')
+RIDGE_PRIOR = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float)
+RIDGE_ALPHA = 25.0
+WEEKLY_ALPHA = 10.0
 
 
 def baseline_rate(series, issue, window, gap=GAP):
@@ -139,33 +143,43 @@ def scores(rows, base_key, draws=DRAWS):
         views = float(np.mean([log_error(r['views'], r['actual']) for r in cases]))
         scaled = [r for r in cases if r.get('views_scaled') is not None]
         views_scaled = float(np.mean([log_error(r['views_scaled'], r['actual']) for r in scaled])) if len(scaled) == len(cases) else None
+        ml_cases = [r for r in cases if r.get('ml') is not None]
+        ml_err = float(np.mean([log_error(r['ml'], r['actual']) for r in ml_cases])) if len(ml_cases) == len(cases) else None
         # Descriptive sensitivity: weight each province's mean error by its total deaths.
         province_cases = [[r for r in cases if r['province'] == name] for name in sorted({r['province'] for r in cases})]
         toll = sum(r['actual'] for r in cases)
         weighted = {key: sum(sum(r['actual'] for r in group) * np.mean([log_error(r[key], r['actual']) for r in group])
                              for group in province_cases) / toll if toll else None for key in ('baseline', 'views')}
-        rho = {'baseline': [], 'views': []}
+        rho = {'baseline': [], 'views': [], 'ml': []}
         for issue in sorted({r['issue'] for r in cases}):
             group = [r for r in cases if r['issue'] == issue]
-            for key in rho:
+            for key in ('baseline', 'views'):
                 value = spearman([r[key] for r in group], [r['actual'] for r in group])
                 if value is not None:
                     rho[key].append(value)
+            if ml_err is not None:
+                value = spearman([r['ml'] for r in group], [r['actual'] for r in group])
+                if value is not None:
+                    rho['ml'].append(value)
         result[str(days)] = {
             'issues': len({r['issue'] for r in cases}), 'forecasts': len(cases),
             'excluded': sum(r['horizon'] == days for r in rows) - len(cases),
-            'error_baseline': base, 'error_views': views,
+            'error_baseline': base, 'error_views': views, 'error_ml': ml_err,
             'skill_views': 1 - views / base if base > 0 else None,
             'skill_views_90': block_interval(cases, 'views', 'baseline', max(3, months), draws),
+            'skill_ml': None if ml_err is None or base <= 0 else 1 - ml_err / base,
+            'skill_ml_90': None if ml_err is None else block_interval(cases, 'ml', 'baseline', max(3, months), draws),
             'error_views_scaled': views_scaled,
             'death_weighted_error_baseline': weighted['baseline'], 'death_weighted_error_views': weighted['views'],
             'skill_views_scaled': None if views_scaled is None or base <= 0 else 1 - views_scaled / base,
             'skill_views_scaled_90': None if views_scaled is None else block_interval(cases, 'views_scaled', 'baseline', max(3, months), draws),
             'rank_baseline': float(np.mean(rho['baseline'])) if rho['baseline'] else None,
             'rank_views': float(np.mean(rho['views'])) if rho['views'] else None,
+            'rank_ml': float(np.mean(rho['ml'])) if rho['ml'] else None,
             'total_actual': float(sum(r['actual'] for r in cases)),
             'total_baseline': float(sum(r['baseline'] for r in cases)),
             'total_views': float(sum(r['views'] for r in cases)),
+            'total_ml': float(sum(r['ml'] for r in cases)) if ml_err is not None else None,
         }
     return result
 
@@ -219,3 +233,187 @@ def province_series(rows, base_key):
             out.setdefault(r['province'], []).append(
                 [r['issue'], round(r['actual'], 1), round(r[base_key], 1), None if r['views'] is None else round(r['views'], 1)])
     return out
+
+
+# Spatio-Temporal ML Model (ACLED Baselines + Precursors + Spatial Spillover + X Nowcast) ---------------------------
+
+def feature_vector(name, issue, monthly, precursors=None, neighbors=None, gap=GAP, nowcast=None):
+    """Build the 7-feature spatio-temporal vector for (province, issue).
+
+    When `nowcast` is provided (from X posts covering the M-1 reporting-lag month),
+    the model uses the nowcasted M-1 deaths and precursor signals for that province.
+    Quiet provinces (b1 == 0) stay at zero unless an additive `control_change > 0` triggers onset.
+    """
+    series = dict(monthly[name])
+    use_gap = gap
+    if nowcast and name in nowcast:
+        series[shift(issue, -1)] = nowcast[name]['deaths']
+        use_gap = 0
+    b1 = baseline_rate(series, issue, 1, use_gap)
+    b3 = baseline_rate(series, issue, 3, use_gap)
+    b6 = baseline_rate(series, issue, 6, use_gap)
+    if any(v is None for v in (b1, b3, b6)):
+        return None
+    if nowcast and name in nowcast:
+        cc = float(nowcast[name].get('control_change', 0.0))
+        es = float(nowcast[name].get('escalation', 0.0))
+        de = float(nowcast[name].get('deescalation', 0.0))
+    elif precursors:
+        cc = baseline_rate(precursors['control_change'].get(name, {}), issue, 1, gap) or 0.0
+        es = baseline_rate(precursors['escalation'].get(name, {}), issue, 1, gap) or 0.0
+        de = baseline_rate(precursors['deescalation'].get(name, {}), issue, 1, gap) or 0.0
+    else:
+        cc = es = de = 0.0
+    nb_list = (neighbors or {}).get(name, ())
+    nb_vals = [baseline_rate(monthly.get(nb, {}), issue, 1, gap) for nb in nb_list]
+    nb_vals = [v for v in nb_vals if v is not None]
+    nb1 = float(np.mean(nb_vals)) if nb_vals else 0.0
+    active = 1.0 if (b1 > 0 or cc > 0) else 0.0
+    return np.array([
+        math.log1p(b1),
+        active * (math.log1p(b3) - math.log1p(b1)),
+        active * (math.log1p(b6) - math.log1p(b1)),
+        math.log1p(cc),
+        active * math.log1p(es),
+        active * math.log1p(de),
+        active * math.log1p(nb1),
+    ], dtype=float)
+
+
+def fit_ridge(X, y, alpha=RIDGE_ALPHA):
+    """Fit Ridge regression shrunk toward the 1-month persistence prior w0 = [1, 0, ...]."""
+    if len(X) == 0:
+        return RIDGE_PRIOR.copy()
+    X_mat = np.asarray(X, dtype=float)
+    y_vec = np.asarray(y, dtype=float)
+    dim = X_mat.shape[1]
+    return np.linalg.solve(X_mat.T @ X_mat + alpha * np.eye(dim), X_mat.T @ y_vec + alpha * RIDGE_PRIOR)
+
+
+def add_ml(rows, monthly, precursors=None, neighbors=None, gap=GAP, alpha=RIDGE_ALPHA):
+    """Attach walk-forward Spatio-Temporal ML predictions (`ml`) to each backtest row without future leakage."""
+    all_months = sorted({m for series in monthly.values() for m in series})
+    if len(all_months) < 8:
+        for r in rows:
+            r['ml'] = r.get('base_1')
+        return rows
+    first_train = all_months[6 + gap]
+    last_issue = max((r['issue'] for r in rows), default=first_train)
+    candidate_issues = issues_between(first_train, last_issue)
+    feats = {(p, i): feature_vector(p, i, monthly, precursors, neighbors, gap)
+             for i in candidate_issues for p in monthly}
+    by_issue_horizon = {}
+    for issue in sorted({r['issue'] for r in rows}):
+        cutoff = shift(issue, -gap - 1)
+        for days, months in HORIZONS.items():
+            train_issues = [ti for ti in candidate_issues if shift(ti, months - 1) <= cutoff]
+            X_tr, y_tr = [], []
+            for ti in train_issues:
+                for p in monthly:
+                    f = feats.get((p, ti))
+                    act = outcome(monthly[p], ti, months)
+                    if f is not None and act is not None:
+                        X_tr.append(f)
+                        y_tr.append(math.log1p(act / months))
+            by_issue_horizon[issue, days] = fit_ridge(X_tr, y_tr, alpha)
+    for r in rows:
+        f = feats.get((r['province'], r['issue']))
+        w = by_issue_horizon.get((r['issue'], r['horizon']))
+        months = HORIZONS[r['horizon']]
+        if f is None or w is None:
+            r['ml'] = None
+        else:
+            r['ml'] = max(0.0, math.expm1(max(0.0, float(f @ w)))) * months
+    return rows
+
+
+def predict_issue_ml(issue, monthly, precursors=None, neighbors=None, gap=GAP, nowcast=None, alpha=RIDGE_ALPHA):
+    """Fit the Spatio-Temporal ML model on all resolved months up to `issue - gap - 1` and predict 30/60/90d."""
+    all_months = sorted({m for series in monthly.values() for m in series})
+    first_train = all_months[min(6 + gap, len(all_months) - 1)]
+    cutoff = shift(issue, -gap - 1)
+    train_candidates = issues_between(first_train, cutoff) if first_train <= cutoff else []
+    feats = {(p, ti): feature_vector(p, ti, monthly, precursors, neighbors, gap)
+             for ti in train_candidates for p in monthly}
+    weights = {}
+    for days, months in HORIZONS.items():
+        valid_issues = [ti for ti in train_candidates if shift(ti, months - 1) <= cutoff]
+        X_tr, y_tr = [], []
+        for ti in valid_issues:
+            for p in monthly:
+                f = feats.get((p, ti))
+                act = outcome(monthly[p], ti, months)
+                if f is not None and act is not None:
+                    X_tr.append(f)
+                    y_tr.append(math.log1p(act / months))
+        weights[days] = fit_ridge(X_tr, y_tr, alpha)
+    predictions = {name: {} for name in monthly}
+    for name in monthly:
+        f_base = feature_vector(name, issue, monthly, precursors, neighbors, gap, nowcast=None)
+        f_x = feature_vector(name, issue, monthly, precursors, neighbors, gap, nowcast=nowcast) if nowcast and name in nowcast else None
+        for days, months in HORIZONS.items():
+            w = weights[days]
+            predictions[name][f'ml_{days}'] = None if f_base is None else round(max(0.0, math.expm1(max(0.0, float(f_base @ w)))) * months, 1)
+            predictions[name][f'x_{days}'] = None if f_x is None else round(max(0.0, math.expm1(max(0.0, float(f_x @ w)))) * months, 1)
+    return predictions, {str(d): [round(float(v), 4) for v in w] for d, w in weights.items()}
+
+
+def predict_weekly_holdout(weekly_deaths, weekly_precursors, neighbors, target_week, nowcasts_by_name, alpha=WEEKLY_ALPHA):
+    """Train the weekly Spatio-Temporal Ridge model up to `target_week - 2w` and evaluate on `target_week` (e.g. 2026-10-24).
+
+    `weekly_deaths` maps `week_iso -> {province: deaths}` (or `(province, date) -> deaths`).
+    `nowcasts_by_name` maps label -> nowcast dict for the gap week `target_week - 1w`.
+    """
+    from datetime import date, timedelta
+    target = date.fromisoformat(target_week) if isinstance(target_week, str) else target_week
+    provinces_list = sorted(neighbors) if neighbors else sorted({p for w in weekly_deaths.values() for p in (w if isinstance(w, dict) else [])})
+
+    def get_val(table, prov, wk):
+        iso = wk.isoformat()
+        if iso in table and isinstance(table[iso], dict):
+            return float(table[iso].get(prov, 0.0))
+        return float(table.get((prov, wk), 0.0))
+
+    def wk_feat(prov, wk, nowcast=None):
+        w2 = wk - timedelta(weeks=2)
+        b4 = float(np.mean([get_val(weekly_deaths, prov, wk - timedelta(weeks=i)) for i in range(2, 6)]))
+        b12 = float(np.mean([get_val(weekly_deaths, prov, wk - timedelta(weeks=i)) for i in range(2, 14)]))
+        if nowcast and prov in nowcast:
+            b1 = float(nowcast[prov]['deaths'])
+            cc = float(nowcast[prov].get('control_change', 0.0))
+            es = float(nowcast[prov].get('escalation', 0.0))
+            de = float(nowcast[prov].get('deescalation', 0.0))
+        else:
+            b1 = get_val(weekly_deaths, prov, w2)
+            cc = get_val((weekly_precursors or {}).get('control_change', {}), prov, w2)
+            es = get_val((weekly_precursors or {}).get('escalation', {}), prov, w2)
+            de = get_val((weekly_precursors or {}).get('deescalation', {}), prov, w2)
+        nbs = (neighbors or {}).get(prov, ())
+        nb_val = float(np.mean([get_val(weekly_deaths, nb, w2) for nb in nbs])) if nbs else 0.0
+        active = 1.0 if (b1 > 0 or cc > 0) else 0.0
+        return np.array([
+            math.log1p(b1),
+            active * (math.log1p(b4) - math.log1p(b1)),
+            active * (math.log1p(b12) - math.log1p(b1)),
+            math.log1p(cc),
+            active * math.log1p(es),
+            active * math.log1p(de),
+            active * math.log1p(nb_val),
+        ], dtype=float)
+
+    all_weeks = sorted(date.fromisoformat(w) for w in weekly_deaths if isinstance(w, str))
+    train_weeks = [w for w in all_weeks if w <= target - timedelta(weeks=2) and (w - timedelta(weeks=13)) >= min(all_weeks)]
+    X_tr = [wk_feat(p, w) for w in train_weeks for p in provinces_list]
+    y_tr = [math.log1p(get_val(weekly_deaths, p, w)) for w in train_weeks for p in provinces_list]
+    weights = fit_ridge(X_tr, y_tr, alpha)
+
+    lagged_week = target - timedelta(weeks=2)
+    base_1w = {p: get_val(weekly_deaths, p, lagged_week) for p in provinces_list}
+    actual = {p: get_val(weekly_deaths, p, target) for p in provinces_list}
+    ml_only = {p: round(max(0.0, math.expm1(max(0.0, float(wk_feat(p, target) @ weights)))), 2) for p in provinces_list}
+    models = {'acled_simple': base_1w, 'ml_acled_only': ml_only}
+    for label, nowcast in (nowcasts_by_name or {}).items():
+        models[label] = {p: round(max(0.0, math.expm1(max(0.0, float(wk_feat(p, target, nowcast) @ weights)))), 2) for p in provinces_list}
+    return {'target_week': target.isoformat(), 'lagged_week': lagged_week.isoformat(),
+            'weights': dict(zip(FEATURE_NAMES, [round(float(v), 4) for v in weights])),
+            'actual': actual, 'models': models}

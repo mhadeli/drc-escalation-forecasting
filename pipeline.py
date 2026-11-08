@@ -68,14 +68,17 @@ def ingest_acled(path):
     cover = acled.coverage(rows)
     weekly = {d: acled.weekly_totals(rows, d) for d in acled.DEFINITIONS}
     monthly = {d: acled.to_monthly(weekly[d], cover) for d in acled.DEFINITIONS}
+    pre_weekly = acled.weekly_precursors(rows)
+    pre_monthly = {k: acled.to_monthly(pre_weekly[k], cover) for k in pre_weekly}
     last = date.fromisoformat(cover['last_week'])
-    recent = [last - timedelta(weeks=i) for i in range(12, -1, -1)]
+    recent = [last - timedelta(weeks=i) for i in range(52, -1, -1)]
     x.write_json(INPUTS / 'acled.json', {
         'source': 'ACLED weekly aggregated data, Democratic Republic of Congo', 'file_sha256': x.checksum(path),
         'rows': len(rows), 'retrieved_at': x.now().isoformat(), **cover,
         'definitions': {d: list(t) for d, t in acled.DEFINITIONS.items()}, 'primary': acled.PRIMARY,
-        'monthly': monthly,
-        'weekly': {d: {w.isoformat(): acled.week_totals(weekly[d], w) for w in recent} for d in acled.DEFINITIONS}})
+        'monthly': monthly, 'precursors': pre_monthly,
+        'weekly': {d: {w.isoformat(): acled.week_totals(weekly[d], w) for w in recent} for d in acled.DEFINITIONS},
+        'weekly_precursors': {k: {w.isoformat(): acled.week_totals(pre_weekly[k], w) for w in recent} for k in pre_weekly}})
     return cover
 
 
@@ -124,8 +127,10 @@ def ingest_posts(path, extractor='rules'):
     if len({p['id'] for p in posts}) != len(posts):
         raise ValueError('Duplicate post IDs in the snapshot.')
     extraction = {}
+    rule_tagged = [fc.classify(p) for p in posts]
+    rule_signals = fc.province_signals(rule_tagged, times[-1])
     if extractor == 'rules':
-        tagged = [fc.classify(p) for p in posts]
+        tagged = rule_tagged
     else:
         from drc_watch import extract_llm
         tagged, extraction = extract_llm.tag_posts(posts, extractor)
@@ -134,13 +139,20 @@ def ingest_posts(path, extractor='rules'):
         extraction = {k: extraction[k] for k in ('model', 'prompt_version', 'posts', 'errors', 'tokens')}
     if extraction.get('errors', 0) > .02 * len(posts):
         raise ValueError('More than 2% of extractions failed; review the private extraction records before ingestion.')
-    signals = fc.province_signals(tagged, times[-1])
+    signals = fc.province_signals(tagged, times[-1], credible_only=(extractor != 'rules'))
+    # If cached gemini-3.8-flash LLM extractions exist locally, include them alongside rules for side-by-side comparison.
+    llm_credible = signals if extractor != 'rules' else None
+    if extractor == 'rules':
+        from drc_watch import extract_llm
+        if all(any(p.exists() for p in extract_llm._cache_paths(post, 'gemini-3.8-flash')) for post in posts):
+            llm_rows, _ = extract_llm.tag_posts(posts, 'gemini-3.8-flash')
+            llm_credible = fc.province_signals(llm_rows, times[-1], credible_only=True)
     by_week = {}
     for row in tagged:
         day = date.fromisoformat(row['created_at'][:10])
         week = (day - timedelta(days=(day.weekday() - 5) % 7)).isoformat()
         by_week.setdefault(week, []).append(row)
-    weekly = {week: fc.province_signals(rows, times[-1]) for week, rows in sorted(by_week.items())}
+    weekly = {week: fc.province_signals(rows, times[-1], credible_only=(extractor != 'rules')) for week, rows in sorted(by_week.items())}
     x.write_json(INPUTS / 'x_counts.json', {
         'source': 'X recent search, saved pull', 'posts_sha256': x.checksum(path), 'extractor': extractor,
         'ingested_at': x.now().isoformat(), 'extraction': extraction,
@@ -148,7 +160,8 @@ def ingest_posts(path, extractor='rules'):
         'usable_posts': sum(map(usable, tagged)), 'authors': len({p.get('author_id') for p in posts}),
         'posts_per_day': dict(sorted(Counter(p['created_at'][:10] for p in posts).items())),
         'languages': dict(Counter(p.get('lang', 'und') for p in posts).most_common()),
-        'provinces': signals, 'weeks': weekly})
+        'provinces': signals, 'rules_provinces': rule_signals, 'llm_credible_provinces': llm_credible,
+        'weeks': weekly})
     return signals
 
 
@@ -173,6 +186,9 @@ def stamp(stage, status, detail):
 
 def run_backtest(draws=backtest.DRAWS):
     data, views_in = read('acled.json'), read('views.json')
+    geo = read('provinces.geojson') if (INPUTS / 'provinces.geojson').exists() else {'features': []}
+    neighbors = provinces.neighbors(geo)
+    precursors = data.get('precursors')
     monthly = data['monthly'][data['primary']]
     last_issue = acled.shift(data['complete_through'], -2)
     issues = backtest.issues_between(FIRST_ISSUE, last_issue)
@@ -182,11 +198,13 @@ def run_backtest(draws=backtest.DRAWS):
     reference = freeze_reference(window, errors, backtest.views_scale(rows), data)
     key = f"base_{reference['window']}"
     backtest.add_scaled(rows, reference['views_scale'])
+    backtest.add_ml(rows, monthly, precursors, neighbors)
     evaluation = [r for r in rows if r['issue'] >= EVALUATION_START]
     if not evaluation:
         raise ValueError('No resolved evaluation outcomes from 2024 onward.')
     no_gap = backtest.add_scaled(backtest.panel(monthly, views_by_issue, [i for i in issues if i >= EVALUATION_START], gap=0),
                                  reference['views_scale'])
+    backtest.add_ml(no_gap, monthly, precursors, neighbors, gap=0)
     result = {
         'definition': data['primary'], 'window': reference['window'], 'gap_months': backtest.GAP,
         'views_scale': reference['views_scale'],
@@ -216,28 +234,33 @@ def write_report(result):
     lines = ['# DRC province fatalities: retrospective evaluation', '',
              f"Evaluation issues: {result['evaluation']['first_issue']} to {result['evaluation']['last_issue']}.",
              f"Selected baseline: {result['window']}-month average, ending at M-2.",
-             'Primary results keep the original frozen reference. Horizons are 1/2/3 calendar months.', '',
-             '| Months | Cases | Excluded | Log error: baseline | VIEWS | Rescaled VIEWS | VIEWS skill, 90% interval |',
-             '|---|---:|---:|---:|---:|---:|---|']
+             'Primary results compare ACLED Simple Baseline, Spatio-Temporal ML (ACLED precursors + spillover), and VIEWS across 1/2/3 calendar months.', '',
+             '| Months | Cases | Excluded | Log error: Simple | ML | VIEWS | Rescaled VIEWS | ML skill vs Simple (90% CI) | VIEWS skill vs Simple (90% CI) |',
+             '|---|---:|---:|---:|---:|---:|---:|---|---|']
     if first:
-        lines[6:6] = [f"National one-month total: baseline **{first['total_baseline']:,.0f}**, "
+        lines[6:6] = [f"National one-month total: simple baseline **{first['total_baseline']:,.0f}**, "
+                      f"ML **{(first.get('total_ml') or 0):,.0f}**, "
                       f"ACLED **{first['total_actual']:,.0f}**, VIEWS **{first['total_views']:,.0f}**.",
-                      f"Mean province rank correlation: baseline **{rank(first['rank_baseline'])}**, "
+                      f"Mean province rank correlation: ML **{rank(first.get('rank_ml'))}**, simple baseline **{rank(first['rank_baseline'])}**, "
                       f"VIEWS **{rank(first['rank_views'])}**. National level, ranking and log error answer different questions.", '']
     for days, s in result['evaluation']['scores'].items():
         ci, skill, scaled = s['skill_views_90'], s['skill_views'], s['error_views_scaled']
+        ml_err, ml_skill, ml_ci = s.get('error_ml'), s.get('skill_ml'), s.get('skill_ml_90')
         interval = 'not estimable' if ci is None else f'[{ci[0]:.3f}, {ci[1]:.3f}]'
+        ml_interval = 'not estimable' if ml_ci is None else f'[{ml_ci[0]:.3f}, {ml_ci[1]:.3f}]'
         skill_text = 'undefined' if skill is None else f'{skill:.3f}'
+        ml_skill_text = 'undefined' if ml_skill is None else f'{ml_skill:.3f}'
         scaled_text = 'missing' if scaled is None else f'{scaled:.3f}'
+        ml_text = 'missing' if ml_err is None else f'{ml_err:.3f}'
         lines.append(f"| {fc.HORIZONS[int(days)]} | {s['forecasts']} | {s['excluded']} | "
-                     f"{s['error_baseline']:.3f} | {s['error_views']:.3f} | {scaled_text} | {skill_text}, {interval} |")
-    lines += ['', 'Positive skill favours VIEWS; negative skill favours the ACLED-history baseline.', '',
+                     f"{s['error_baseline']:.3f} | {ml_text} | {s['error_views']:.3f} | {scaled_text} | "
+                     f"{ml_skill_text}, {ml_interval} | {skill_text}, {interval} |")
+    lines += ['', 'Positive skill means lower log error than the ACLED simple baseline.', '',
               'This is exploratory. Original selection used 2023 issue dates, including early-2024 outcomes for longer horizons.',
               'Restricting selection outcomes to 2023 selects three months; that check is recorded separately without changing the frozen reference.',
               'ACLED is a revised snapshot, and its event-type proxy is not UCDP state-based violence.',
               'Weeks are apportioned to calendar months by days; those monthly totals are approximate.',
               'The existing November example was saved after November 1 and is retrospective.',
-              'No conclusion about the predictive value of X is available.', '',
               f"ACLED SHA-256: `{result['acled_sha256']}`.", f"Code hash: `{result['code_hash']}`."]
     path = x.ROOT / 'reports' / 'backtest.md'
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -281,17 +304,51 @@ def run_xcheck():
         raise ValueError(f'The X posts span {first} to {last}, more than the ACLED week starting {week}.')
     if any(w not in data['weekly'][d] for w in weeks for d in data['definitions']):
         raise ValueError('ACLED has not supplied all weeks overlapping these posts. Refresh the ACLED export.')
+    llm_provinces = counts.get('llm_credible_provinces')
+    rules_provinces = counts.get('rules_provinces') or counts['provinces']
     rows = [{'province': name, 'event_authors': sum(spots[name]['event'] for spots in weeks.values()),
              'authors': sum(spots[name]['authors'] for spots in weeks.values()),
+             'llm_event_authors': None if not llm_provinces else llm_provinces[name]['event'],
              **{f'deaths_{d}': sum(data['weekly'][d][w][name] for w in weeks) for d in data['definitions']}}
             for name in counts['provinces']]
+    holdout = None
+    next_week = (date.fromisoformat(max(weeks)) + timedelta(weeks=1)).isoformat()
+    lagged_week = (date.fromisoformat(min(weeks)) - timedelta(weeks=1)).isoformat()
+    primary_weekly = data['weekly'][data['primary']]
+    if next_week in primary_weekly and lagged_week in primary_weekly and len(primary_weekly) >= 15:
+        geo = read('provinces.geojson') if (INPUTS / 'provinces.geojson').exists() else {'features': []}
+        neighbors = provinces.neighbors(geo)
+        base_lagged = primary_weekly[lagged_week]
+        nowcasts = {'ml_x_rules': fc.nowcast_from_x(rules_provinces, base_lagged)}
+        if llm_provinces:
+            nowcasts['ml_x_llm_credible'] = fc.nowcast_from_x(llm_provinces, base_lagged)
+        raw_holdout = backtest.predict_weekly_holdout(primary_weekly, data.get('weekly_precursors'), neighbors, next_week, nowcasts)
+        x_names = list(counts['provinces'])
+        actual_x = [raw_holdout['actual'][n] for n in x_names]
+        scores_x = {}
+        for model_name, preds in raw_holdout['models'].items():
+            pred_x = [preds[n] for n in x_names]
+            scores_x[model_name] = {
+                'log_error': round(sum(backtest.log_error(p, a) for p, a in zip(pred_x, actual_x)) / len(x_names), 3),
+                'spearman': round(backtest.spearman(pred_x, actual_x) or 0.0, 3),
+                'predictions': {n: preds[n] for n in x_names},
+            }
+        holdout = {
+            'target_week': next_week, 'lagged_week': lagged_week, 'gap_week': min(weeks),
+            'actual': {n: raw_holdout['actual'][n] for n in x_names},
+            'weights': raw_holdout['weights'],
+            'models': scores_x,
+        }
     result = {'week_start': min(weeks), 'week_end': (date.fromisoformat(max(weeks)) + timedelta(days=6)).isoformat(),
               'weeks_n': len(weeks), 'x_measure': 'author-week counts' if len(weeks) > 1 else 'unique authors',
               'alignment_note': 'ACLED totals cover full weeks overlapping the posts; partial post weeks are not exact date matches.',
               'posts_from': counts['first_post'], 'posts_to': counts['last_post'], 'rows': rows,
               'rank_event_authors_vs_state_deaths': backtest.spearman([r['event_authors'] for r in rows], [r['deaths_state'] for r in rows]),
+              'rank_llm_event_authors_vs_state_deaths': (
+                  None if not llm_provinces else backtest.spearman([r['llm_event_authors'] for r in rows], [r['deaths_state'] for r in rows])),
               'rank_event_authors_vs_organised_deaths': backtest.spearman([r['event_authors'] for r in rows], [r['deaths_organised'] for r in rows]),
               'rank_all_authors_vs_state_deaths': backtest.spearman([r['authors'] for r in rows], [r['deaths_state'] for r in rows]),
+              'holdout_next_week': holdout,
               'provinces_n': len(rows)}
     x.write_json(HISTORY / 'x_check.json', result)
     return result
@@ -338,17 +395,25 @@ def run_forecast(force=False, issue_key=None):
         if rate is None:
             raise ValueError(f'ACLED does not cover the baseline window for {name}; it needs months through {acled.shift(issue_key, -2)}.')
         rates[name] = rate
+    x_signals = counts.get('llm_credible_provinces') or counts['provinces']
     events = {name: counts['provinces'][name]['event'] for name in fc.X_PROVINCES}
     multipliers = fc.x_multipliers(events, {name: rates[name] for name in fc.X_PROVINCES})
+    geo = read('provinces.geojson') if (INPUTS / 'provinces.geojson').exists() else {'features': []}
+    neighbors = provinces.neighbors(geo)
+    nowcast = fc.nowcast_from_x(x_signals, {name: rates[name] for name in fc.X_PROVINCES})
+    ml_preds, ml_weights = backtest.predict_issue_ml(issue_key, monthly, data.get('precursors'), neighbors, nowcast=nowcast)
     rows = []
     for name in sorted(monthly):
-        row = {'province': name, 'baseline_rate': round(rates[name], 2), 'x_multiplier': None, 'x_event_authors': events.get(name)}
+        row = {'province': name, 'baseline_rate': round(rates[name], 2), 'x_multiplier': None, 'x_event_authors': events.get(name),
+               'x_llm_event_authors': x_signals[name]['event'] if name in x_signals else None}
         if name in multipliers:
             row['x_multiplier'] = round(multipliers[name], 3)
         for days, months in fc.HORIZONS.items():
             base = rates[name] * months
             row[f'baseline_{days}'] = round(base, 1)
+            row[f'ml_{days}'] = ml_preds[name].get(f'ml_{days}')
             row[f'x_{days}'] = round(base * fc.decayed(multipliers[name], days), 1) if name in multipliers else None
+            row[f'x_ml_{days}'] = ml_preds[name].get(f'x_{days}')
             v = backtest.views_total(run['provinces'].get(name), issue_key, months)
             if v is None:
                 raise ValueError(f'Incomplete VIEWS totals for {name}, issue {issue_key}. Re-ingest the run.')
@@ -356,7 +421,7 @@ def run_forecast(force=False, issue_key=None):
             row[f'views_scaled_{days}'] = None if v is None else round(v * reference['views_scale'], 1)
         rows.append(row)
     saved = {'issued': issue.isoformat(), 'definition': data['primary'], 'window_months': reference['window'],
-             'views_scale': reference['views_scale'],
+             'views_scale': reference['views_scale'], 'ml_weights': ml_weights,
              'acled_through': acled.shift(issue_key, -2), 'x_posts': [counts['first_post'], counts['last_post']],
              'views_run': {k: run[k] for k in ('run', 'released', 'last_input')},
              'months': {str(d): [acled.shift(issue_key, i) for i in range(m)] for d, m in fc.HORIZONS.items()},

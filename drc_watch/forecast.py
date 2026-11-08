@@ -183,12 +183,17 @@ def resolve_hotspot(value):
     return None
 
 
-def province_signals(tagged, issued_at):
-    """Distinct authors per province. A post counts for every province it names; each author counts once per signal."""
+def province_signals(tagged, issued_at, credible_only=False):
+    """Distinct authors per province. A post counts for every province it names; each author counts once per signal.
+
+    When `credible_only=True` and rows include an LLM `source_type`, only `field_report` and `news` posts are counted.
+    """
     counts = {name: defaultdict(set) for name in X_PROVINCES}
     seen = {name: set() for name in X_PROVINCES}
     for row in tagged:
         if not row['on_topic'] or row['historical'] or row.get('extraction_error'):
+            continue
+        if credible_only and row.get('source_type') and row['source_type'] not in ('field_report', 'news'):
             continue
         posted = datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))
         if posted > issued_at:
@@ -223,3 +228,22 @@ def x_multipliers(event_authors, baseline_deaths):
 def decayed(multiplier, days):
     """Average of a multiplier that fades with a 21-day time constant over the first `days` days."""
     return 1 + (multiplier - 1) * SIGNAL_DECAY_DAYS / days * (-math.expm1(-days / SIGNAL_DECAY_DAYS))
+
+
+def nowcast_from_x(signals, baseline_deaths):
+    """Impute the reporting-lag period (M-1 or W-1) per province from X precursor signals and baseline deaths.
+
+    Combines the attention-to-baseline multiplier for ongoing conflict with raw X precursor counts
+    (event, control_change, escalation, deescalation) so the spatio-temporal ML model can both
+    adjust active provinces and trigger new outbreaks when control_change > 0 in a zero-baseline province.
+    """
+    events = {name: signals[name]['event'] for name in signals}
+    multipliers = x_multipliers(events, {name: baseline_deaths.get(name, 0.0) for name in signals})
+    return {
+        name: {
+            'deaths': baseline_deaths.get(name, 0.0) * multipliers[name],
+            'multiplier': multipliers[name],
+            **{key: float(signals[name].get(key, 0)) for key in SIGNALS},
+        }
+        for name in signals
+    }
