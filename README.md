@@ -125,6 +125,8 @@ ACLED and VIEWS results are published with attribution. Confirm with each provid
 
 ## Folders
 
+The page is plain HTML, CSS and JavaScript, with no frontend build step. Edit `drc_watch/dashboard.html` for the page structure, `dashboard.css` for appearance, and `dashboard.js` for chart rendering and wording. Run `python pipeline.py dashboard` to copy the assets and embed the published results into `site/`. Forecast values and the frozen reference are independent of these presentation files.
+
 ```
 drc_escalation_watch/
 ├── pipeline.py          command line: ingest, backtest, xcheck, forecast, score, orchestrate, dashboard
@@ -138,7 +140,9 @@ drc_escalation_watch/
 │   ├── extract_llm.py   optional LLM extraction
 │   ├── evaluate.py      blind labelling and extractor scores
 │   ├── dashboard.py     builds the static page from history/
-│   └── dashboard.html   the page template
+│   ├── dashboard.html   page structure and data placeholder
+│   ├── dashboard.css    presentation styles
+│   └── dashboard.js     charts, interactions and reader explanations
 ├── .github/workflows/   tests, pipeline, dashboard
 ├── reports/prereg.md    the evaluation specification
 ├── tests/

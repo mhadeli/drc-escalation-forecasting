@@ -35,4 +35,6 @@ def build(history, site):
     payload = json.dumps(collect(history), ensure_ascii=False, allow_nan=False).replace('</', '<\\/')
     site.mkdir(parents=True, exist_ok=True)
     (site / 'index.html').write_text(TEMPLATE.read_text().replace('/*DATA*/null', payload))
+    for name in ('dashboard.css', 'dashboard.js'):
+        (site / name).write_text(TEMPLATE.with_name(name).read_text())
     return site / 'index.html'
