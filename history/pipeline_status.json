@@ -1,35 +1,35 @@
 {
-  "finished_at": "2026-11-07T23:28:02+00:00",
+  "finished_at": "2026-11-08T00:15:32+00:00",
   "stages": [
     {
       "stage": "Inputs",
       "status": "done",
       "detail": "ACLED through 2026-10-30 (complete through 2026-09), VIEWS and X aggregates present.",
-      "at": "2026-11-07T23:27:58+00:00"
+      "at": "2026-11-08T00:15:29+00:00"
     },
     {
       "stage": "Backtest",
       "status": "done",
       "detail": "31 monthly issues. At 30 days VIEWS's error is 39% higher than the baseline's.",
-      "at": "2026-11-07T23:28:02+00:00"
+      "at": "2026-11-08T00:15:32+00:00"
     },
     {
       "stage": "X check",
       "status": "done",
       "detail": "6 provinces, week of 2026-10-17; rank correlation 0.82.",
-      "at": "2026-11-07T23:28:02+00:00"
+      "at": "2026-11-08T00:15:32+00:00"
     },
     {
       "stage": "Forecast",
       "status": "done",
       "detail": "Retrospective forecast: frozen since 2026-11-07, target starts 2026-11-01.",
-      "at": "2026-11-07T23:28:02+00:00"
+      "at": "2026-11-08T00:15:32+00:00"
     },
     {
       "stage": "Score",
       "status": "skipped",
       "detail": "Nothing has resolved yet; 30 days resolves about 2026-12-14.",
-      "at": "2026-11-07T23:28:02+00:00"
+      "at": "2026-11-08T00:15:32+00:00"
     }
   ]
 }
