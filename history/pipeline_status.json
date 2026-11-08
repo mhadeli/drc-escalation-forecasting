@@ -1,35 +1,35 @@
 {
-  "finished_at": "2026-11-08T18:00:11+00:00",
+  "finished_at": "2026-11-08T18:17:16+00:00",
   "stages": [
     {
       "stage": "Inputs",
       "status": "done",
       "detail": "ACLED through 2026-10-30 (complete through 2026-09), VIEWS and X aggregates present.",
-      "at": "2026-11-08T17:58:47+00:00"
+      "at": "2026-11-08T18:15:49+00:00"
     },
     {
       "stage": "Backtest",
       "status": "done",
       "detail": "Random Forest chosen on 2023. At 30 days its error is 26% lower than VIEWS's.",
-      "at": "2026-11-08T18:00:10+00:00"
+      "at": "2026-11-08T18:17:16+00:00"
     },
     {
       "stage": "X check",
       "status": "done",
       "detail": "6 provinces, week of 2026-10-17; rank correlation 0.94.",
-      "at": "2026-11-08T18:00:11+00:00"
+      "at": "2026-11-08T18:17:16+00:00"
     },
     {
       "stage": "Forecast",
       "status": "done",
       "detail": "Retrospective forecast: frozen since 2026-11-08, target starts 2026-11-01.",
-      "at": "2026-11-08T18:00:11+00:00"
+      "at": "2026-11-08T18:17:16+00:00"
     },
     {
       "stage": "Score",
       "status": "skipped",
       "detail": "Nothing has resolved yet; 30 days resolves about 2026-12-14.",
-      "at": "2026-11-08T18:00:11+00:00"
+      "at": "2026-11-08T18:17:16+00:00"
     }
   ]
 }
