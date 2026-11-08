@@ -10,13 +10,12 @@
 <body>
 <a class="skip" href="#main-content">Skip to content</a>
 <header>
-  <div class="masthead"><a class="wordmark" href="#/results">DRC / Conflict Fatality Forecast Study</a><span>Independent research<span class="byline"> · Hussain Adeli</span></span></div>
+  <div class="masthead"><a class="wordmark" href="#/results">DRC / Conflict Fatality Forecast Study</a></div>
   <div class="hero">
     <p class="eyebrow">Conflict forecasting, examined</p>
     <h1>Can machine learning on ACLED, plus X posts, forecast DRC conflict deaths <em>better than VIEWS?</em></h1>
     <p id="lead"></p>
   </div>
-  <div class="study-meta" id="study-meta"></div>
 </header>
 <nav class="tabs" role="tablist" id="tabs"></nav>
 <main id="main-content" tabindex="-1">
@@ -26,7 +25,10 @@
   <section role="tabpanel" id="workflow"></section>
   <section role="tabpanel" id="limits"></section>
 </main>
-<footer><p class="small">Conflict data: ACLED, acleddata.com. Forecasts: VIEWS, Uppsala University and PRIO, viewsforecasting.org. Boundaries: geoBoundaries, from OpenStreetMap (ODbL). Neither ACLED nor VIEWS produced or endorsed this page. Research estimates, not operational warnings.</p></footer>
+<footer>
+  <div class="study-meta" id="study-meta"></div>
+  <p class="small">Conflict data: ACLED, acleddata.com. Forecasts: VIEWS, Uppsala University and PRIO, viewsforecasting.org. Boundaries: geoBoundaries, from OpenStreetMap (ODbL). Neither ACLED nor VIEWS produced or endorsed this page. Research estimates, not operational warnings.</p>
+</footer>
 <div id="tip" role="status"></div>
 <script>const DATA = /*DATA*/null;</script>
 <script src="dashboard.js"></script>

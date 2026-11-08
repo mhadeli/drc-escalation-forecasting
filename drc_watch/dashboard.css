@@ -26,14 +26,13 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 .skip:focus { top: 12px; }
 .masthead { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 25px 0 18px; border-bottom: 1px solid var(--text); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
 .wordmark { white-space: nowrap; font-weight: 750; text-decoration: none; }
-.masthead span { color: var(--text-3); letter-spacing: .04em; }
 .hero { padding: 43px 0 28px; }
 .eyebrow { color: var(--baseline); font-size: 11px; letter-spacing: .15em; text-transform: uppercase; font-weight: 700; margin: 0 0 14px; }
 h1, .chapter h2 { font-family: Georgia, "Times New Roman", serif; font-weight: 400; letter-spacing: -.035em; }
 h1 { font-size: clamp(36px, 4.3vw, 59px); line-height: 1.09; max-width: 920px; margin: 0; }
 h1 em { color: var(--baseline); font-weight: 400; }
 #lead { max-width: 68ch; font-size: 16px; margin: 21px 0 0; color: var(--text-2); }
-.study-meta { display: flex; gap: 12px 26px; flex-wrap: wrap; padding-bottom: 22px; font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; }
+.study-meta { display: flex; gap: 12px 26px; flex-wrap: wrap; padding-bottom: 12px; font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; }
 .study-meta span + span { border-left: 1px solid var(--border); padding-left: 26px; }
 nav.tabs { display: flex; gap: 20px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--page); z-index: 1000; overflow-x: auto; }
 nav.tabs button { flex: none; font-size: 12px; padding: 16px 0 13px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-3); cursor: pointer; white-space: nowrap; }
@@ -94,8 +93,6 @@ footer p { max-width: 100ch; font-size: 11px !important; }
 @media (max-width: 720px) {
   main, header, nav.tabs, footer { padding-left: 22px; padding-right: 22px; }
   .masthead { padding-top: 20px; font-size: 10px; letter-spacing: .07em; }
-  .masthead .byline { display: none; }
-  .masthead span { font-size: 9px; text-align: right; }
   .hero { padding-top: 31px; }
   #lead { font-size: 14px; }
   .study-meta { gap: 7px 14px; font-size: 9px; }
