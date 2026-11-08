@@ -5,7 +5,7 @@ import math
 import re
 import unicodedata
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 HORIZONS = {30: 1, 60: 2, 90: 3}  # Days, and the calendar months they cover from the first of the issue month.
 SIGNAL_DECAY_DAYS = 21

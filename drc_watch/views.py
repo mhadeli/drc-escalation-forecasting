@@ -5,7 +5,6 @@ import json
 import math
 import re
 import time
-from datetime import date
 from urllib.parse import urlparse
 
 import requests

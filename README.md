@@ -115,7 +115,7 @@ The page is plain HTML, CSS and JavaScript, with no frontend build step. Edit `d
 
 ```
 drc_escalation_watch/
-├── pipeline.py          command line: ingest, backtest, xcheck, forecast, score, orchestrate, dashboard
+├── pipeline.py          command line: fetch-posts, ingest, backtest, xcheck, forecast, score, orchestrate, dashboard
 ├── drc_watch/
 │   ├── acled.py         weekly file, death definitions, weeks to months, coverage
 │   ├── provinces.py     province names, boundaries, grid cells to provinces

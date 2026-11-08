@@ -57,6 +57,11 @@ def issue_date(key):
     return date.fromisoformat(f'{key}-01')
 
 
+def input_neighbors():
+    geo = read('provinces.geojson') if (INPUTS / 'provinces.geojson').exists() else {'features': []}
+    return provinces.neighbors(geo)
+
+
 def usable(row):
     return row['on_topic'] and not row['historical'] and not row.get('extraction_error')
 
@@ -207,8 +212,7 @@ def stamp(stage, status, detail):
 
 def run_backtest(draws=backtest.DRAWS):
     data, views_in = read('acled.json'), read('views.json')
-    geo = read('provinces.geojson') if (INPUTS / 'provinces.geojson').exists() else {'features': []}
-    neighbors = provinces.neighbors(geo)
+    neighbors = input_neighbors()
     precursors = data.get('precursors')
     monthly = data['monthly'][data['primary']]
     last_issue = acled.shift(data['complete_through'], -2)
@@ -375,8 +379,7 @@ def run_xcheck():
     lagged_week = (date.fromisoformat(min(weeks)) - timedelta(weeks=1)).isoformat()
     primary_weekly = data['weekly'][data['primary']]
     if next_week in primary_weekly and lagged_week in primary_weekly and len(primary_weekly) >= 15:
-        geo = read('provinces.geojson') if (INPUTS / 'provinces.geojson').exists() else {'features': []}
-        neighbors = provinces.neighbors(geo)
+        neighbors = input_neighbors()
         base_lagged = primary_weekly[lagged_week]
         nowcasts = {'ml_x_rules': fc.nowcast_from_x(rules_provinces, base_lagged)}
         if llm_provinces:
@@ -458,8 +461,7 @@ def run_forecast(force=False, issue_key=None):
     x_signals = counts.get('llm_credible_provinces') or counts['provinces']
     events = {name: counts['provinces'][name]['event'] for name in fc.X_PROVINCES}
     multipliers = fc.x_multipliers(events, {name: rates[name] for name in fc.X_PROVINCES})
-    geo = read('provinces.geojson') if (INPUTS / 'provinces.geojson').exists() else {'features': []}
-    neighbors = provinces.neighbors(geo)
+    neighbors = input_neighbors()
     nowcast = fc.nowcast_from_x(x_signals, {name: rates[name] for name in fc.X_PROVINCES})
     ml_preds, ml_info = backtest.predict_issue_ml(issue_key, monthly, data.get('precursors'), neighbors, nowcast=nowcast, model=ml_model())
     rows = []
@@ -477,8 +479,8 @@ def run_forecast(force=False, issue_key=None):
             v = backtest.views_total(run['provinces'].get(name), issue_key, months)
             if v is None:
                 raise ValueError(f'Incomplete VIEWS totals for {name}, issue {issue_key}. Re-ingest the run.')
-            row[f'views_{days}'] = None if v is None else round(v, 1)
-            row[f'views_scaled_{days}'] = None if v is None else round(v * reference['views_scale'], 1)
+            row[f'views_{days}'] = round(v, 1)
+            row[f'views_scaled_{days}'] = round(v * reference['views_scale'], 1)
         rows.append(row)
     saved = {'issued': issue.isoformat(), 'definition': data['primary'], 'window_months': reference['window'],
              'views_scale': reference['views_scale'], 'ml': ml_info,

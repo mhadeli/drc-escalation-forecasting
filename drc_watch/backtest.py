@@ -71,10 +71,7 @@ def outcome(series, issue, months):
 def views_total(views_series, issue, months):
     if views_series is None:
         return None
-    keys = [shift(issue, i) for i in range(months)]
-    if any(k not in views_series for k in keys):
-        return None
-    return sum(views_series[k] for k in keys)
+    return outcome(views_series, issue, months)
 
 
 def issues_between(first, last):

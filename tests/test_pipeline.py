@@ -7,7 +7,7 @@ import shutil
 import sys
 import tempfile
 import unittest
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest import mock
 

@@ -74,7 +74,7 @@ def read_jsonl(path):
 def latest_summary():
     files = sorted((DATA / 'raw').glob('summary_*.json'))
     if not files:
-        raise ValueError('No X snapshot: use run --fetch or run --posts /path/to/saved.jsonl.')
+        raise ValueError('No X snapshot: use pipeline.py fetch-posts or pass --posts /path/to/saved.jsonl.')
     summary = json.loads(files[-1].read_text())
     summary['posts_file'] = str(DATA / 'raw' / summary['posts_file'])
     return summary

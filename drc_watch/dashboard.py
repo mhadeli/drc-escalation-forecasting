@@ -31,14 +31,12 @@ def acled_eda(acled):
         by_province.append({
             'province': p, 'state': s, 'organised': o, 'civilians': round(max(0.0, o - s), 1),
             'active_months': sum(1 for v in state[p].values() if v >= 1),
-            'zero_months': sum(1 for v in state[p].values() if v == 0),
             'control_change': round(sum((pre.get('control_change', {}).get(p) or {}).values()), 1),
             'escalation': round(sum((pre.get('escalation', {}).get(p) or {}).values()), 1),
             'deescalation': round(sum((pre.get('deescalation', {}).get(p) or {}).values()), 1),
         })
     return {
-        **{k: acled.get(k) for k in ('source', 'rows', 'first_week', 'last_week', 'coverage_end',
-                                     'first_month', 'complete_through', 'definitions', 'primary')},
+        **{k: acled.get(k) for k in ('rows', 'first_week', 'coverage_end', 'complete_through', 'definitions')},
         'months_n': len(months),
         'by_year': by_year,
         'by_province': sorted(by_province, key=lambda r: -r['state']),
@@ -56,7 +54,7 @@ def views_eda(views, acled):
     runs = {}
     for issue, info in sorted(issues.items()):
         r = runs.setdefault(info['run'], {'run': info['run'], 'released': info['released'],
-                                          'last_input': info['last_input'], 'first_issue': issue, 'last_issue': issue, 'issues': 0})
+                                          'first_issue': issue, 'last_issue': issue, 'issues': 0})
         r['last_issue'] = issue
         r['issues'] += 1
     by_province = []
@@ -67,11 +65,10 @@ def views_eda(views, acled):
         by_province.append({
             'province': p, 'cells': cells_map.get(p, 0),
             'acled_mean': round(sum(a_vals) / n, 1), 'views_mean': round(sum(v_vals) / n, 1),
-            'acled_total': round(sum(a_vals), 1), 'views_total': round(sum(v_vals), 1),
+            'acled_total': round(sum(a_vals), 1),
             'zero_months': sum(1 for v in a_vals if v == 0),
         })
     return {
-        'source': views.get('source'), 'boundaries': views.get('boundaries'),
         'cells': views.get('cells'), 'border_cells': views.get('border_cells'),
         'issues_n': len(issues), 'resolved_issues_n': len(resolved),
         'first_issue': min(issues) if issues else None, 'last_issue': max(issues) if issues else None,
@@ -95,7 +92,7 @@ def collect(history):
             m: round(sum(series[m] for series in acled['monthly'][acled['primary']].values()), 1)
             for m in sorted(next(iter(acled['monthly'][acled['primary']].values())))},
         'views': views_eda(views, acled),
-        'x': None if not x else {k: x.get(k) for k in ('source', 'first_post', 'last_post', 'posts', 'usable_posts',
+        'x': None if not x else {k: x.get(k) for k in ('first_post', 'last_post', 'posts', 'usable_posts',
                                                    'authors', 'posts_per_day', 'languages', 'extractor', 'extraction',
                                                    'topics', 'provinces', 'rules_provinces', 'llm_credible_provinces')},
     }
