@@ -245,37 +245,6 @@ def national_series(rows, base_key, horizon=30):
     return out
 
 
-def national_horizons(rows, base_key):
-    """DRC totals per issue across 30, 60 and 90-day horizons."""
-    return {str(days): national_series(rows, base_key, days) for days in HORIZONS}
-
-
-def by_province(rows, base_key):
-    out = {}
-    for name in sorted({r['province'] for r in rows}):
-        cases = [r for r in rows if r['province'] == name and r['horizon'] == 30 and r[base_key] is not None and r['views'] is not None]
-        if not cases:
-            continue
-        ml_cases = [r for r in cases if r.get('ml') is not None]
-        out[name] = {'months': len(cases), 'actual': round(sum(r['actual'] for r in cases), 1),
-                     'error_baseline': round(float(np.mean([log_error(r[base_key], r['actual']) for r in cases])), 3),
-                     'error_ml': round(float(np.mean([log_error(r['ml'], r['actual']) for r in ml_cases])), 3) if ml_cases else None,
-                     'error_views': round(float(np.mean([log_error(r['views'], r['actual']) for r in cases])), 3)}
-    return out
-
-
-def province_series(rows, base_key):
-    """Per province at 30 days: month, actual, baseline, VIEWS, and ML for the drill-down chart."""
-    out = {}
-    for r in sorted(rows, key=lambda r: r['issue']):
-        if r['horizon'] == 30 and r[base_key] is not None:
-            out.setdefault(r['province'], []).append(
-                [r['issue'], round(r['actual'], 1), round(r[base_key], 1),
-                 None if r['views'] is None else round(r['views'], 1),
-                 None if r.get('ml') is None else round(r['ml'], 1)])
-    return out
-
-
 # Spatio-Temporal ML Model (ACLED Baselines + Precursors + Spatial Spillover + X Nowcast) ---------------------------
 
 def feature_vector(name, issue, monthly, precursors=None, neighbors=None, gap=GAP, nowcast=None):

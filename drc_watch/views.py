@@ -106,36 +106,11 @@ def fetch_run(run, pause=3):
     return meta
 
 
-def fetch_all(pause=3, selected=None):
-    runs = fetch_catalog()
-    eligible = [r for r in runs if r['released'] <= now().date().isoformat()]
-    if selected:
-        eligible = [r for r in eligible if r['run'] in selected]
-        if {r['run'] for r in eligible} != set(selected):
-            raise ValueError('A requested VIEWS run is absent or has not been released.')
-    for run in sorted(eligible, key=lambda r: (r['last_input'], r['released'])):
-        missing = not (OUT / f"{run['run']}.meta.json").exists()
-        fetch_run(run['run'], pause)
-        print(f"cached {run['run']}")
-        if missing:
-            time.sleep(pause)
-
-
-def cell_id(lat, lon):
-    if not (-90 <= lat < 90 and -180 <= lon < 180):
-        raise ValueError('Coordinates outside the PRIO-GRID.')
-    return math.floor((lat + 90) * 2) * 720 + math.floor((lon + 180) * 2) + 1
-
-
 def cell_center(gid):
     if not 1 <= gid <= 259200:
         raise ValueError('Invalid PRIO-GRID ID.')
     row, column = divmod(gid - 1, 720)
     return -90 + row * .5 + .25, -180 + column * .5 + .25
-
-
-def month_id(day):
-    return (day.year - 1980) * 12 + day.month
 
 
 def month_index(key):

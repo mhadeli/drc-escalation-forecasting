@@ -17,21 +17,16 @@ def collect(history):
     x = read(inputs / 'x_counts.json')
     return {
         'backtest': read(history / 'backtest.json'), 'xcheck': read(history / 'x_check.json'),
-        'forecast': read(history / 'forecast.json'), 'live': read(history / 'live_scores.json'),
-        'reference': read(history / 'reference.json'), 'status': read(history / 'pipeline_status.json'),
-        'ingest': read(history / 'ingest_status.json'), 'geo': read(inputs / 'provinces.geojson'),
-        # Metadata only: the dashboard does not need the full monthly tables.
-        'acled': None if not acled else {k: acled.get(k) for k in ('source', 'rows', 'first_week', 'last_week', 'coverage_end',
-                                                               'complete_through', 'definitions', 'primary')},
+        'forecast': read(history / 'forecast.json'), 'status': read(history / 'pipeline_status.json'),
+        'ingest': read(history / 'ingest_status.json'),
+        'acled': None if not acled else {k: acled.get(k) for k in ('first_week', 'coverage_end')},
         # National monthly totals only, for the time chart; never per-event rows.
         'national_actual': None if not acled else {
             m: round(sum(series[m] for series in acled['monthly'][acled['primary']].values()), 1)
             for m in sorted(next(iter(acled['monthly'][acled['primary']].values())))},
-        'views': None if not views else {'cells': views.get('cells'), 'border_cells': views.get('border_cells'),
-                                         'cells_per_province': views.get('cells_per_province'), 'boundaries': views.get('boundaries')},
-        'x': None if not x else {k: x.get(k) for k in ('first_post', 'last_post', 'posts', 'usable_posts', 'authors',
-                                                   'posts_per_day', 'languages', 'extractor', 'topics',
-                                                   'provinces', 'rules_provinces', 'llm_credible_provinces')},
+        'views': None if not views else {'cells': views.get('cells')},
+        'x': None if not x else {k: x.get(k) for k in ('first_post', 'last_post', 'posts', 'authors',
+                                                   'extractor', 'topics', 'rules_provinces')},
     }
 
 

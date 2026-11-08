@@ -121,8 +121,7 @@ SIGNALS = {'event': ('affrontement',
                   'disarm',
                   'dialogue')}
 
-HISTORICAL = ('\\b(19[5-9]\\d|200\\d|201\\d|202[0-4])\\b.*\\b(attaque|attack|massacre|tue|killed|guerre|war)',
- '\\bans apres\\b',
+HISTORICAL = ('\\bans apres\\b',
  '\\byears ago\\b',
  '\\bil y a \\d+ ans\\b',
  'anniversaire',
@@ -160,7 +159,7 @@ def classify(post):
     places = [name for name, (_, aliases) in HOTSPOTS.items() if tokens.intersection(aliases)]
     posted = datetime.fromisoformat(post['created_at'].replace('Z', '+00:00'))
     years = [int(y) for y in re.findall(r'\b(?:19|20)\d{2}\b', text)]
-    historical = any(re.search(p, text) for p in HISTORICAL[1:])
+    historical = any(re.search(p, text) for p in HISTORICAL)
     historical |= bool(years and max(years) < posted.year and re.search(r'attaque|attack|massacre|killed|guerre|war', text))
     return {
         **{key: post.get(key) for key in ('id', 'author_id', 'created_at', 'text')},
@@ -231,19 +230,7 @@ def decayed(multiplier, days):
 
 
 def nowcast_from_x(signals, baseline_deaths):
-    """Impute the reporting-lag period (M-1 or W-1) per province from X precursor signals and baseline deaths.
-
-    Combines the attention-to-baseline multiplier for ongoing conflict with raw X precursor counts
-    (event, control_change, escalation, deescalation) so the spatio-temporal ML model can both
-    adjust active provinces and trigger new outbreaks when control_change > 0 in a zero-baseline province.
-    """
+    """Impute the reporting-lag period (M-1 or W-1) deaths per province from X event authors and baseline deaths."""
     events = {name: signals[name]['event'] for name in signals}
     multipliers = x_multipliers(events, {name: baseline_deaths.get(name, 0.0) for name in signals})
-    return {
-        name: {
-            'deaths': baseline_deaths.get(name, 0.0) * multipliers[name],
-            'multiplier': multipliers[name],
-            **{key: float(signals[name].get(key, 0)) for key in SIGNALS},
-        }
-        for name in signals
-    }
+    return {name: {'deaths': baseline_deaths.get(name, 0.0) * multipliers[name]} for name in signals}

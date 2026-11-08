@@ -2,7 +2,7 @@
 
   python -m drc_watch.evaluate [--posts FILE] sample   # write data/labels/to_label.csv (200 posts, stratified)
   python -m drc_watch.evaluate score             # score the rules extractor against labelled rows
-  python -m drc_watch.evaluate score --model claude-haiku-5-5 --model claude-opus-5-5
+  python -m drc_watch.evaluate score --model gemini-3.8-flash
 
 Labelling: fill the gold columns in to_label.csv, then save it as data/labels/gold.csv.
 Booleans are 1/0, lists are separated by ";". Hotspots can be short names ("Walungu",

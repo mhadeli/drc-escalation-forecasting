@@ -253,9 +253,6 @@ def run_backtest(draws=backtest.DRAWS):
             else backtest.selection_rows(rows), key, draws),
         'sensitivity_no_gap': backtest.scores(no_gap, key, draws),
         'national': backtest.national_series(rows, key),
-        'national_horizons': backtest.national_horizons(rows, key),
-        'provinces': backtest.by_province(evaluation, key),
-        'province_series': backtest.province_series(rows, key),
         'views_runs': {i: v['run'] for i, v in views_in['issues'].items() if i in issues},
         'acled_complete_through': data['complete_through'], 'acled_sha256': data['file_sha256'], 'code_hash': code_hash()}
     x.write_json(HISTORY / 'backtest.json', result)
@@ -606,7 +603,7 @@ def main():
     get.add_argument('--posts', type=Path, help='saved X posts, JSON lines')
     get.add_argument('--offline', action='store_true', help='use the cached VIEWS catalog and runs only')
     get.add_argument('--issue', default=ISSUE, help='forecast target month, YYYY-MM')
-    get.add_argument('--extractor', default='rules', help='rules or a Gemini/Claude model ID; LLM calls require billing')
+    get.add_argument('--extractor', default='rules', help='rules or a Gemini model ID; LLM calls require billing')
     test = sub.add_parser('backtest')
     test.add_argument('--draws', type=int, default=backtest.DRAWS)
     sub.add_parser('xcheck')

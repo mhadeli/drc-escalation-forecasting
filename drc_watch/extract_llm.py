@@ -22,8 +22,6 @@ except ImportError:  # Allows reading cached LLM extractions without optional de
 
 CACHE = DATA / 'llm_cache'
 PROMPT_VERSION = 'v2'
-CREDIBLE_SOURCES = ('field_report', 'news')
-FALLBACK_MODELS = {'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-1'}
 
 Hotspot = Literal[tuple(fc.HOTSPOTS)]
 Actor = Literal[tuple(fc.ACTORS)]
@@ -59,21 +57,12 @@ Rules:
 Hotspots: {", ".join(fc.HOTSPOTS)}."""
 
 
-def is_gemini(model):
-    return model.startswith('gemini')
-
-
-def _client(model):
-    env = load_env()
-    if is_gemini(model):
-        from google import genai
-        from google.genai import types
-        options = types.HttpOptions(timeout=60_000, retry_options=types.HttpRetryOptions(attempts=1))
-        key = env.get('GEMINI_API_KEY')
-        return genai.Client(api_key=key, http_options=options) if key else genai.Client(http_options=options)
-    import anthropic
-    key = env.get('ANTHROPIC_API_KEY')
-    return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+def _client():
+    from google import genai
+    from google.genai import types
+    options = types.HttpOptions(timeout=60_000, retry_options=types.HttpRetryOptions(attempts=1))
+    key = load_env().get('GEMINI_API_KEY')
+    return genai.Client(api_key=key, http_options=options) if key else genai.Client(http_options=options)
 
 
 def _user_message(post):
@@ -111,31 +100,6 @@ def _call_gemini(client, post, model, attempts=5):
     return result
 
 
-def _call_claude(client, post, model):
-    import anthropic
-    kwargs = {'betas': ['server-side-fallback-2026-07-01'], 'fallbacks': 'default'} if model in FALLBACK_MODELS else {}
-    try:
-        response = client.beta.messages.parse(
-            model=model, max_tokens=2000,
-            system=[{'type': 'text', 'text': SYSTEM, 'cache_control': {'type': 'ephemeral'}}],
-            messages=[{'role': 'user', 'content': _user_message(post)}],
-            output_config={'effort': 'low'}, output_format=PostExtraction, **kwargs)
-    except (anthropic.BadRequestError, anthropic.NotFoundError, anthropic.AuthenticationError):
-        raise
-    except anthropic.APIError as error:
-        return {'extraction': None, 'error': f'{type(error).__name__}: {error}'[:300]}
-    result = {'model': response.model, 'error': None, 'extraction': None,
-              'usage': {'input': response.usage.input_tokens, 'output': response.usage.output_tokens,
-                        'cache_read': response.usage.cache_read_input_tokens or 0}}
-    if response.stop_reason == 'refusal':
-        result['error'] = 'refusal'
-    elif response.parsed_output is None:
-        result['error'] = f'no parsed output (stop_reason={response.stop_reason})'
-    else:
-        result['extraction'] = response.parsed_output.model_dump()
-    return result
-
-
 def _cache_paths(post, model):
     schema = PostExtraction.model_json_schema() if hasattr(PostExtraction, 'model_json_schema') else {}
     identity = json.dumps([SYSTEM, schema, post['id'], post['created_at'], post['text']], sort_keys=True)
@@ -150,8 +114,7 @@ def extract_one(client, post, model):
     if legacy.exists():
         return json.loads(legacy.read_text())
     started = time.time()
-    call = _call_gemini if is_gemini(model) else _call_claude
-    record = {'prompt_version': PROMPT_VERSION, **call(client, post, model), 'seconds': round(time.time() - started, 2)}
+    record = {'prompt_version': PROMPT_VERSION, **_call_gemini(client, post, model), 'seconds': round(time.time() - started, 2)}
     if record['extraction'] is not None:  # Failures are not cached, so they retry on the next run.
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(record))
@@ -176,7 +139,7 @@ def to_tagged(post, record):
 
 def tag_posts(posts, model, workers=4):
     need_api = any(not any(p.exists() for p in _cache_paths(post, model)) for post in posts)
-    client = _client(model) if need_api else None
+    client = _client() if need_api else None
     with ThreadPoolExecutor(max_workers=workers) as pool:
         records = list(pool.map(lambda post: extract_one(client, post, model), posts))
     usage = {key: sum((r.get('usage') or {}).get(key, 0) for r in records) for key in ('input', 'output', 'cache_read')}

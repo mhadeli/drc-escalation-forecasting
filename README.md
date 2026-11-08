@@ -79,7 +79,7 @@ Copy `.env.example` to `.env` and supply your keys locally. Fetching posts and c
 ```bash
 .venv/bin/python pipeline.py fetch-posts --limit 1000
 .venv/bin/pip install -r requirements-llm.txt
-# Ingest a saved pull with --posts PATH --extractor MODEL_ID to use Gemini or Claude.
+# Ingest a saved pull with --posts PATH --extractor MODEL_ID to use Gemini.
 # Rules remain the default and need no LLM dependencies.
 ```
 
@@ -134,5 +134,5 @@ drc_escalation_watch/
 ├── tests/
 ├── history/             aggregates, results and status, tracked in git
 ├── raw_data/            gitignored: ACLED exports
-└── data/                gitignored: raw posts, VIEWS cache, boundaries, old project archive
+└── data/                gitignored: raw posts, VIEWS cache, boundaries, LLM cache
 ```
